@@ -92,16 +92,31 @@ app.whenReady().then(() => {
     return service().switchBranch(name);
   });
   ipcMain.handle('repository:cherry-pick', async (_event, { commit }) => {
-    if (!await confirm('Appliquer un commit ?', `Cherry-pick ${commit}. Un point de récupération local sera conservé; les hooks Git configurés peuvent s’exécuter.`)) return null;
+    const preview = await service().previewCommit(commit);
+    if (!await confirm('Appliquer un commit ?', `Cherry-pick ${preview.shortHash} — ${preview.subject}\n(hash complet : ${preview.hash})\n\nUn point de récupération local sera conservé; les hooks Git configurés peuvent s’exécuter.`)) return null;
     return service().cherryPick(commit);
   });
   ipcMain.handle('repository:rebase', async (_event, { upstream }) => {
-    if (!await confirm('Réécrire la branche ?', `Rebase sur ${upstream}. Un point de récupération local sera conservé. Cette action réécrit les commits locaux; Git peut laisser une opération en conflit à résoudre ou annuler explicitement.`)) return null;
+    const { upstream: resolvedBase, commits } = await service().interactiveRebaseCommits(upstream);
+    const rangeLines = commits.length
+      ? commits.map((commit) => `${commit.shortHash} ${commit.subject}`).join('\n')
+      : '(aucun commit local à rejouer sur cette base)';
+    if (!await confirm('Réécrire la branche ?', `Rebase sur « ${upstream} » (base résolue : ${resolvedBase.slice(0, 12)}).\n\nCommits qui seront rejoués, dans l’ordre :\n${rangeLines}\n\nUn point de récupération local sera conservé. Cette action réécrit les commits locaux; Git peut laisser une opération en conflit à résoudre ou annuler explicitement.`)) return null;
     return service().rebase(upstream);
   });
   ipcMain.handle('repository:rebase-interactive:commits', async (_event, { upstream }) => service().interactiveRebaseCommits(upstream));
   ipcMain.handle('repository:rebase-interactive:run', async (_event, { upstream, plan }) => {
-    if (!await confirm('Confirmer le rebase interactif ?', `Appliquer exactement ce plan d’actions sur ${upstream}. Une référence de récupération sera créée. En cas de conflit, l’opération reste à terminer ou annuler avec Git.`)) return null;
+    const { upstream: resolvedBase, commits } = await service().interactiveRebaseCommits(upstream);
+    const byHash = new Map(commits.map((commit) => [commit.hash, commit]));
+    const planLines = Array.isArray(plan)
+      ? plan.map((item, index) => {
+          const commit = byHash.get(item?.hash);
+          const shortHash = commit?.shortHash || (typeof item?.hash === 'string' ? item.hash.slice(0, 12) : '?');
+          const subject = commit?.subject || '(commit inconnu)';
+          return `${index + 1}. ${item?.action || '?'} ${shortHash} ${subject}`;
+        }).join('\n')
+      : '(plan invalide)';
+    if (!await confirm('Confirmer le rebase interactif ?', `Base résolue : ${resolvedBase.slice(0, 12)}.\n\nPlan exact qui sera appliqué, dans l’ordre :\n${planLines}\n\nUne référence de récupération sera créée. En cas de conflit, l’opération reste à terminer ou annuler avec Git.`)) return null;
     return service().interactiveRebase(upstream, plan);
   });
   createWindow();

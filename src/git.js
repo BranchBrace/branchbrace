@@ -7,23 +7,64 @@ import { fileURLToPath } from 'node:url';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
 
+// Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
+// Héritées de l'environnement du processus hôte, elles peuvent détourner une
+// opération vers un dépôt différent de celui choisi par l'utilisateur
+// (cwd), même si le chemin affiché à l'écran reste le bon.
+const DANGEROUS_GIT_ENV_VARS = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_CEILING_DIRECTORIES',
+];
+
+function sanitizedEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  for (const name of DANGEROUS_GIT_ENV_VARS) delete env[name];
+  return env;
+}
+
 function runGit(cwd, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       cwd,
       shell: false,
       windowsHide: true,
-      env: { ...process.env, ...options.env },
+      env: sanitizedEnv(options.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];
     const stderr = [];
-    let length = 0;
-    child.stdout.on('data', (chunk) => { length += chunk.length; stdout.push(chunk); });
-    child.stderr.on('data', (chunk) => { stderr.push(chunk); });
-    child.on('error', (error) => reject(new GitWorkbenchError(error.code === 'ENOENT' ? 'git-missing' : 'git-launch-failed')));
+    let stdoutLength = 0;
+    let stderrLength = 0;
+    let settled = false;
+    const failTooLarge = () => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new GitWorkbenchError('git-output-too-large'));
+    };
+    child.stdout.on('data', (chunk) => {
+      stdoutLength += chunk.length;
+      stdout.push(chunk);
+      if (stdoutLength > MAX_BUFFER) failTooLarge();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderrLength += chunk.length;
+      stderr.push(chunk);
+      if (stderrLength > MAX_BUFFER) failTooLarge();
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(new GitWorkbenchError(error.code === 'ENOENT' ? 'git-missing' : 'git-launch-failed'));
+    });
     child.on('close', (code) => {
-      if (length > MAX_BUFFER) return reject(new GitWorkbenchError('git-output-too-large'));
+      if (settled) return;
+      settled = true;
       const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
@@ -81,6 +122,7 @@ export class GitService {
   }
 
   async status() {
+    await this.#ensureRepositoryPath();
     const [raw, branch, upstream] = await Promise.all([
       runGit(this.repositoryPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
       runGit(this.repositoryPath, ['branch', '--show-current']),
@@ -123,6 +165,7 @@ export class GitService {
   }
 
   async commit(message) {
+    await this.#ensureRepositoryPath();
     if (typeof message !== 'string' || !message.trim()) throw new GitWorkbenchError('commit-message-required');
     const staged = await runGit(this.repositoryPath, ['diff', '--cached', '--quiet']).then(() => false).catch((error) => {
       if (error.code === 'git-operation-failed') return true;
@@ -134,6 +177,7 @@ export class GitService {
   }
 
   async push(expectedUpstream) {
+    await this.#ensureRepositoryPath();
     const upstream = (await runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).trim();
     if (expectedUpstream && upstream !== expectedUpstream) throw new GitWorkbenchError('upstream-changed');
     const currentBranch = (await runGit(this.repositoryPath, ['branch', '--show-current'])).trim();
@@ -150,6 +194,7 @@ export class GitService {
   }
 
   async branches() {
+    await this.#ensureRepositoryPath();
     const raw = await runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)', 'refs/heads']);
     return raw.split('\n').filter(Boolean).map((line) => {
       const [name, head] = line.split('\0');
@@ -158,12 +203,14 @@ export class GitService {
   }
 
   async createBranch(name) {
+    await this.#ensureRepositoryPath();
     this.#validateBranchName(name);
     await runGit(this.repositoryPath, ['switch', '--create', name]);
     return this.status();
   }
 
   async switchBranch(name) {
+    await this.#ensureRepositoryPath();
     this.#validateBranchName(name);
     const branches = await this.branches();
     if (!branches.some((branch) => branch.name === name)) throw new GitWorkbenchError('branch-not-found');
@@ -189,7 +236,16 @@ export class GitService {
     return { recoveryRef, status: await this.status() };
   }
 
+  async previewCommit(revision) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(revision);
+    const record = await runGit(this.repositoryPath, ['show', '-s', '--format=%H%x00%h%x00%s', hash]);
+    const fields = record.trimEnd().split('\0');
+    return { hash: fields[0], shortHash: fields[1], subject: fields.slice(2).join('\0') };
+  }
+
   async interactiveRebaseCommits(upstream) {
+    await this.#ensureRepositoryPath();
     const target = await this.#resolveCommit(upstream);
     const raw = await runGit(this.repositoryPath, ['rev-list', '--reverse', `${target}..HEAD`]);
     const commits = [];
@@ -237,6 +293,11 @@ export class GitService {
   async #assertClean() {
     const status = await this.status();
     if (status.files.length) throw new GitWorkbenchError('working-tree-not-clean');
+  }
+
+  async #ensureRepositoryPath() {
+    const root = (await runGit(this.repositoryPath, ['rev-parse', '--show-toplevel'])).trim();
+    if (path.resolve(root) !== this.repositoryPath) throw new GitWorkbenchError('repository-mismatch');
   }
 
   async #resolveCommit(revision) {

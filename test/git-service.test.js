@@ -289,3 +289,30 @@ test('interactive rebase rejects malformed plans before creating a recovery ref'
   const hash = git(repo, 'rev-parse', 'HEAD');
   await assert.rejects(service.interactiveRebase(base, [{ hash, action: 'fixup' }]), (error) => error.code === 'invalid-rebase-plan');
 });
+
+test('an inherited GIT_DIR/GIT_WORK_TREE does not redirect operations to another repository', async (t) => {
+  const { repo, service } = await fixture(t);
+  const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-test-other-'));
+  const other = path.join(otherRoot, 'other-repo');
+  await mkdir(other);
+  git(other, 'init', '--quiet', '-b', 'other-branch');
+  git(other, 'config', 'user.name', 'Other Fixture');
+  git(other, 'config', 'user.email', 'other@example.invalid');
+  await writeFile(path.join(other, 'file.txt'), 'other\n');
+  git(other, 'add', 'file.txt');
+  git(other, 'commit', '--quiet', '-m', 'other initial');
+  t.after(() => rm(otherRoot, { recursive: true, force: true }));
+
+  const savedGitDir = process.env.GIT_DIR;
+  const savedWorkTree = process.env.GIT_WORK_TREE;
+  process.env.GIT_DIR = path.join(other, '.git');
+  process.env.GIT_WORK_TREE = other;
+  try {
+    const status = await service.status();
+    assert.equal(status.branch, 'main');
+    assert.equal((await service.history())[0].subject, 'initial');
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+    if (savedWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedWorkTree;
+  }
+});

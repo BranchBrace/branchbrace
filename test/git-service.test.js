@@ -159,6 +159,38 @@ test('a rejected non-fast-forward push is not reported as success', async (t) =>
   assert.notEqual(git(bare, 'rev-parse', 'refs/heads/main'), git(repo, 'rev-parse', 'HEAD'));
 });
 
+test('a lost push acknowledgement after remote acceptance remains indeterminate without changing the local tree', async (t) => {
+  const { root, repo, service } = await fixture(t);
+  const bare = path.join(root, 'remote.git');
+  const shimDir = path.join(root, 'git-shim');
+  const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim();
+  git(root, 'init', '--quiet', '--bare', bare);
+  git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  git(repo, 'remote', 'add', 'origin', bare);
+  git(repo, 'push', '--quiet', '-u', 'origin', 'main');
+  await writeFile(path.join(repo, 'base.txt'), 'accepted before acknowledgement loss\n');
+  await service.stage('base.txt');
+  await service.commit('push acknowledgement fixture');
+  const localHeadBefore = git(repo, 'rev-parse', 'HEAD');
+  const treeBefore = git(repo, 'write-tree');
+  const statusBefore = git(repo, 'status', '--porcelain=v1', '-z');
+  await mkdir(shimDir);
+  const shim = path.join(shimDir, 'git');
+  await writeFile(shim, `#!/bin/sh\nif [ "$1" = push ]; then\n  "${realGit}" "$@" || exit $?\n  exit 1\nfi\nexec "${realGit}" "$@"\n`);
+  await chmod(shim, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${shimDir}${path.delimiter}${originalPath}`;
+  try {
+    await assert.rejects(service.push('origin/main'), (error) => error.code === 'push-indeterminate');
+  } finally {
+    process.env.PATH = originalPath;
+  }
+  assert.equal(git(bare, 'rev-parse', 'refs/heads/main'), localHeadBefore);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), localHeadBefore);
+  assert.equal(git(repo, 'write-tree'), treeBefore);
+  assert.equal(git(repo, 'status', '--porcelain=v1', '-z'), statusBefore);
+});
+
 test('an unreachable remote is reported as indeterminate, never as a verified push', async (t) => {
   const { root, repo, service } = await fixture(t);
   const bare = path.join(root, 'remote.git');

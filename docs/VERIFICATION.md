@@ -9,7 +9,7 @@
 
 ## Preuves fonctionnelles
 
-`node --test` passe 17 tests d’intégration sur des dépôts Git temporaires :
+`npm test` passe 18 tests d’intégration sur des dépôts Git temporaires et un remote bare local :
 
 - Inspection en lecture seule, état des fichiers modifiés/non suivis/supprimés et lecture de l’historique.
 - Détection des renommages avec le chemin de destination et preview du diff renommé.
@@ -17,20 +17,20 @@
 - Commit avec message non vide, uniquement les fichiers indexés ; message vide et index vide refusés.
 - Hook `pre-commit` utilisateur exécuté.
 - Création/changement de branches locales, préservation des modifications et refus d’un checkout dangereux par Git.
-- Push vers upstream configuré et vérification de la référence distante ; rejet non-fast-forward et remote indisponible signalés comme échec/état indéterminé, jamais comme succès vérifié.
+- Push vers upstream configuré et vérification de la référence distante ; rejet non-fast-forward, remote indisponible et perte d’accusé de réception après acceptation distante signalés comme échec/état indéterminé, jamais comme succès vérifié. Le dernier scénario vérifie la référence du remote et l’arbre local avant/après.
 - Cherry-pick/rebase avec références locales de récupération ; conflit cherry-pick conservant la référence et indiquant `git cherry-pick --abort`.
 - Conflit de rebase conservant la référence et indiquant `git rebase --abort`.
 - Rebase interactif avec plan explicite et recovery ref ; plan malformé refusé.
 
-Qualité/build exercés :
+Qualité/build exercés dans l’environnement courant :
 
-- `node scripts/lint.mjs` : syntaxe vérifiée sur 8 fichiers JavaScript.
-- `npm run typecheck` : invariants du projet vérifiés (`private: true`, `license: UNLICENSED`).
-- `npm run build` : Vite et electron-builder ont produit `artifacts/linux-unpacked` pour Linux x64.
+- `npm test` : 18/18 tests passés (commande exécutée le 2026-10-31).
+- `npm run lint` et `npm run typecheck` via l’entrée npm directe : les deux scripts déclarés passent ; lint vérifie 8 fichiers JavaScript et typecheck les invariants du projet (`private: true`, `license: UNLICENSED`).
+- `npm run build` : Vite 7.3.7 et electron-builder 26.18.0 ont produit `artifacts/linux-unpacked` pour Linux x64 avec Electron 39.8.10.
 - Smoke de la fenêtre empaquetée : `xvfb-run -a env GIT_WORKBENCH_SMOKE=1 ELECTRON_DISABLE_GPU=1 artifacts/linux-unpacked/git-workbench --no-sandbox --disable-gpu` — code 0.
-- Limite de cet essai : pas de parcours manuel interactif de chaque contrôle UI ni de test de plateforme hors Debian 13 x86_64.
+- Limite de cet essai : pas de parcours manuel interactif de chaque contrôle UI ni de test de plateforme hors Debian 13 x86_64. Windows 10+ x64, macOS 12+ Intel/Apple Silicon, Ubuntu 22.04 x86_64 et Debian 12 x86_64 ne sont pas testés et ne sont pas déclarés supportés.
 
-Dans cette session, la commande `npm run lint` via le wrapper terminal a retourné `ESLint output (JSON parse failed: EOF while parsing a value at line 1 column 0)` (code 1). En invoquant directement l’entrée npm sous-jacente (`node /home/hermes/.hermes/node/lib/node_modules/npm/bin/npm-cli.js run lint`), le script déclaré s’exécute et passe ; `node scripts/lint.mjs` passe aussi. Le lint lui-même est vérifié, mais l’anomalie du wrapper terminal est consignée plutôt que présentée comme un passage de `npm run lint`.
+Le wrapper terminal a d’abord mal parsé la sortie de lint (`ESLint output (JSON parse failed: EOF while parsing a value at line 1 column 0)`, code 1) ; le contrôle a été repris par l’entrée npm directe, avec succès. Il s’agit de vérifications locales, pas d’une exécution GitHub Actions. La build candidate actuelle est un répertoire Linux x64 unpacked (284 MiB) dans `artifacts/linux-unpacked`; le smoke test empaqueté sous `xvfb-run` retourne `Desktop window and isolated preload loaded.` (code 0). Aucun artefact Windows/macOS n’a été produit sur cet hôte Linux.
 
 ## Sécurité et confidentialité — limites explicites
 

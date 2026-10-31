@@ -25,5 +25,14 @@ reports/
 .vscode/
 .DS_Store
 
-# Pinned build tools downloaded by the release scripts
-.cache/
+# Claude Source Control (auto-generated)
+.claude/file-attribution.jsonl
+.claude/session-names.json
+.claude/staged-files.json
+.claude/session-pids.json
+.claude/hooks/log-attribution.sh
+
+
+
+# Fichiers locaux de session Claude Code (configuration de prévisualisation, réglages, hooks) : jamais versionnés
+.claude/

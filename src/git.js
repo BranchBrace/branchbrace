@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,9 +28,24 @@ function sanitizedEnv(extra = {}) {
   return env;
 }
 
+// Sous Windows, le `git` du PATH est en général Git\cmd\git.exe, un lanceur qui démarre un second processus : on
+// appelle directement le binaire indiqué par `git --exec-path`, ce qui divise environ par deux le coût de chaque
+// commande. Ce binaire retrouve seul sh, ssh et les hooks ; à défaut, on garde `git`.
+let gitExecutable = null;
+function gitBinary() {
+  if (gitExecutable) return gitExecutable;
+  gitExecutable = 'git';
+  if (process.platform === 'win32') {
+    const result = spawnSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true, env: sanitizedEnv() });
+    const candidate = result.status === 0 ? path.join(result.stdout.trim(), 'git.exe') : null;
+    if (candidate && existsSync(candidate)) gitExecutable = candidate;
+  }
+  return gitExecutable;
+}
+
 function runGit(cwd, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, {
+    const child = spawn(gitBinary(), args, {
       cwd,
       shell: false,
       windowsHide: true,
@@ -88,14 +104,29 @@ export class GitWorkbenchError extends Error {
     this.name = 'GitWorkbenchError';
     this.code = code;
     this.recoveryRef = recoveryRef;
+    this.operation = operation;
   }
+}
+
+// En-tête de `status --branch` : « ## main...origin/main [ahead 1] », « ## main », « ## HEAD (no branch) »
+// ou « ## No commits yet on main ». Un upstream « [gone] » (branche distante supprimée) compte comme absent.
+export function parseBranchHeader(header) {
+  const text = header.slice(3);
+  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null };
+  const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text);
+  if (unborn) return { branch: unborn[1], upstream: null };
+  const [names, tracking = ''] = text.split(' [');
+  const [branch, upstream] = names.split('...');
+  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null };
 }
 
 function parseStatus(raw) {
   const fields = raw.split('\0');
   const files = [];
+  let header = { branch: '(HEAD détachée)', upstream: null };
   for (let i = 0; i < fields.length - 1; i += 1) {
     const record = fields[i];
+    if (record.startsWith('## ')) { header = parseBranchHeader(record); continue; }
     if (record.length < 4) continue;
     const x = record[0];
     const y = record[1];
@@ -107,7 +138,21 @@ function parseStatus(raw) {
     }
     files.push({ path: filePath, originalPath, indexStatus: x, worktreeStatus: y, staged: x !== ' ' && x !== '?', unstaged: y !== ' ', untracked: x === '?' && y === '?' });
   }
-  return files;
+  return { files, ...header };
+}
+
+// `%D` avec --decorate=full : « HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1 ».
+function parseDecorations(raw) {
+  const refs = [];
+  for (let item of raw.split(', ').filter(Boolean)) {
+    let head = false;
+    if (item.startsWith('HEAD -> ')) { head = true; item = item.slice(8); }
+    if (item === 'HEAD') { refs.push({ type: 'head', name: 'HEAD', head: true }); continue; }
+    if (item.startsWith('tag: refs/tags/')) refs.push({ type: 'tag', name: item.slice(15), head });
+    else if (item.startsWith('refs/heads/')) refs.push({ type: 'local', name: item.slice(11), head });
+    else if (item.startsWith('refs/remotes/')) { if (!item.endsWith('/HEAD')) refs.push({ type: 'remote', name: item.slice(13), head }); }
+  }
+  return refs;
 }
 
 // Packaged Electron's execPath is the app binary: without this flag the rebase plan editor
@@ -128,14 +173,17 @@ export class GitService {
     return this.repositoryPath;
   }
 
+  // Un seul lancement de git : l'en-tête `--branch` donne aussi la branche courante et son upstream.
   async status() {
     await this.#ensureRepositoryPath();
-    const [raw, branch, upstream] = await Promise.all([
-      runGit(this.repositoryPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-      runGit(this.repositoryPath, ['branch', '--show-current']),
-      runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']).catch(() => ''),
-    ]);
-    return { files: parseStatus(raw), branch: branch.trim() || '(HEAD détachée)', upstream: upstream.trim() || null };
+    return parseStatus(await runGit(this.repositoryPath, ['status', '--porcelain=v1', '--branch', '-z', '--untracked-files=all']));
+  }
+
+  // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.
+  async snapshot() {
+    await this.#ensureRepositoryPath();
+    const [status, graph, refs] = await Promise.all([this.status(), this.graph(), this.references()]);
+    return { status, graph, refs };
   }
 
   async history() {
@@ -146,28 +194,89 @@ export class GitService {
     });
   }
 
+  // Graphe de toutes les branches locales, distantes et tags (les refs de récupération internes sont exclues).
+  async graph(limit = 500) {
+    await this.#ensureRepositoryPath();
+    const headCommit = () => runGit(this.repositoryPath, ['rev-parse', '--verify', '--quiet', 'HEAD']).then((hash) => hash.trim() || null, () => null);
+    let raw;
+    try {
+      raw = await runGit(this.repositoryPath, [
+        'log', '--date-order', '-n', String(limit), '--branches', '--remotes', '--tags', 'HEAD',
+        '--decorate=full', '--decorate-refs-exclude=refs/git-workbench/*',
+        '--format=%H%x00%P%x00%an%x00%at%x00%D%x00%b%x00%s%x1e',
+      ]);
+    } catch (error) {
+      // Dépôt sans aucun commit : `log HEAD` échoue, ce n'est pas une erreur pour l'interface.
+      if (!await headCommit()) return { head: null, commits: [] };
+      throw error;
+    }
+    const commits = raw.split('\x1e').map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
+      const [hash, parents, author, timestamp, decorations, body, ...subject] = record.split('\0');
+      const summary = body.split('\n').map((line) => line.trim()).find(Boolean) || '';
+      return { hash, parents: parents ? parents.split(' ') : [], author, timestamp: Number(timestamp), refs: parseDecorations(decorations), subject: subject.join('\0'), summary };
+    });
+    // La décoration HEAD évite un lancement de git ; on ne le paie que si HEAD est hors des commits affichés.
+    const head = commits.find((commit) => commit.refs.some((ref) => ref.head))?.hash ?? await headCommit();
+    return { head, commits };
+  }
+
+  async commitDetails(revision) {
+    // Un SHA complet (cas du graphe) se lit pendant que sa validation tourne ; sinon on résout d'abord la révision.
+    const full40 = typeof revision === 'string' && /^[0-9a-f]{40}$/i.test(revision);
+    await this.#ensureRepositoryPath();
+    const resolving = this.#resolveCommit(revision);
+    const hash = full40 ? revision : await resolving;
+    const [, record, files] = await Promise.all([
+      resolving,
+      runGit(this.repositoryPath, ['show', '-s', '--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%cI%x00%B', hash]),
+      this.#commitFiles(hash),
+    ]);
+    const [full, parents, author, email, authorDate, committer, commitDate, ...body] = record.split('\0');
+    return { hash: full, parents: parents ? parents.split(' ') : [], author, email, authorDate, committer, commitDate, message: body.join('\0').trimEnd(), files };
+  }
+
+  async commitFileDiff(revision, filePath) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(revision);
+    const entry = (await this.#commitFiles(hash)).find((file) => file.path === filePath);
+    if (!entry) throw new GitWorkbenchError('file-not-in-commit');
+    const paths = entry.originalPath ? [entry.originalPath, filePath] : [filePath];
+    return runGit(this.repositoryPath, ['show', '--format=', '--no-ext-diff', '--no-color', '-M', '--diff-merges=first-parent', hash, '--', ...paths]);
+  }
+
   async diff(filePath, staged = false) {
-    await this.#assertTrackedOrUntracked(filePath);
-    const entry = (await this.status()).files.find((file) => file.path === filePath);
-    if (!staged && entry?.untracked) {
+    const entry = await this.#statusEntry(filePath);
+    if (!staged && entry.untracked) {
       return runGit(this.repositoryPath, ['diff', '--no-index', '--no-ext-diff', '--no-color', '--', '/dev/null', filePath], { acceptExitCodes: [1] });
     }
     const args = ['diff', '--no-ext-diff', '--no-color'];
     if (staged) args.push('--cached');
     args.push('--', filePath);
-    if (entry?.originalPath) args.push(entry.originalPath);
+    if (entry.originalPath) args.push(entry.originalPath);
     return runGit(this.repositoryPath, args);
   }
 
   async stage(filePath) {
-    await this.#assertTrackedOrUntracked(filePath);
+    await this.#statusEntry(filePath);
     await runGit(this.repositoryPath, ['add', '--', filePath]);
     return this.status();
   }
 
   async unstage(filePath) {
-    await this.#assertTrackedOrUntracked(filePath);
+    await this.#statusEntry(filePath);
     await runGit(this.repositoryPath, ['reset', '--', filePath]);
+    return this.status();
+  }
+
+  async stageAll() {
+    await this.#ensureRepositoryPath();
+    await runGit(this.repositoryPath, ['add', '--all']);
+    return this.status();
+  }
+
+  async unstageAll() {
+    await this.#ensureRepositoryPath();
+    await runGit(this.repositoryPath, ['reset', '--quiet']);
     return this.status();
   }
 
@@ -209,11 +318,31 @@ export class GitService {
     });
   }
 
-  async createBranch(name) {
+  // Sans point de départ : crée la branche au HEAD et bascule dessus. Avec : la crée sur ce commit sans changer de branche.
+  async createBranch(name, startPoint = null) {
     await this.#ensureRepositoryPath();
     this.#validateBranchName(name);
-    await runGit(this.repositoryPath, ['switch', '--create', name]);
+    if (startPoint) await runGit(this.repositoryPath, ['branch', name, await this.#resolveCommit(startPoint)]);
+    else await runGit(this.repositoryPath, ['switch', '--create', name]);
     return this.status();
+  }
+
+  async references() {
+    await this.#ensureRepositoryPath();
+    const raw = await runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)', 'refs/heads', 'refs/remotes', 'refs/tags']);
+    const result = { local: [], remote: [], tags: [] };
+    for (const line of raw.split('\n').filter(Boolean)) {
+      // %(*objectname) est le commit pointé par un tag annoté.
+      const [ref, object, peeled, head, upstream, track] = line.split('\0');
+      const hash = peeled || object;
+      if (ref.startsWith('refs/heads/')) {
+        const ahead = Number(/ahead (\d+)/.exec(track)?.[1] || 0);
+        const behind = Number(/behind (\d+)/.exec(track)?.[1] || 0);
+        result.local.push({ name: ref.slice(11), hash, current: head === '*', upstream: upstream || null, ahead, behind });
+      } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) result.remote.push({ name: ref.slice(13), hash });
+      else if (ref.startsWith('refs/tags/')) result.tags.push({ name: ref.slice(10), hash });
+    }
+    return result;
   }
 
   async switchBranch(name) {
@@ -291,10 +420,44 @@ export class GitService {
     }
   }
 
-  async #assertTrackedOrUntracked(filePath) {
+  // Seuls les fichiers que `git status` liste peuvent être indexés, désindexés ou comparés.
+  async #statusEntry(filePath) {
     if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) throw new GitWorkbenchError('invalid-path');
-    const status = await this.status();
-    if (!status.files.some((file) => file.path === filePath)) throw new GitWorkbenchError('file-not-in-status');
+    const entry = (await this.status()).files.find((file) => file.path === filePath);
+    if (!entry) throw new GitWorkbenchError('file-not-in-status');
+    return entry;
+  }
+
+  async #commitFiles(hash) {
+    const show = (format) => runGit(this.repositoryPath, ['show', '--format=', format, '-z', '-M', '--diff-merges=first-parent', hash]);
+    const [raw, numstat] = await Promise.all([show('--name-status'), show('--numstat')]);
+    const fields = raw.split('\0');
+    const files = [];
+    for (let i = 0; i < fields.length - 1; i += 1) {
+      const status = fields[i].replace(/^\n/, '');
+      if (!status) continue;
+      if (status[0] === 'R' || status[0] === 'C') { files.push({ status: status[0], originalPath: fields[i + 1], path: fields[i + 2] }); i += 2; }
+      else { files.push({ status: status[0], originalPath: null, path: fields[i + 1] }); i += 1; }
+    }
+    // --numstat suit le même ordre que --name-status ; « - » signale un fichier binaire.
+    const stats = numstat.split('\0');
+    let index = 0;
+    for (let i = 0; i < stats.length - 1 && index < files.length; i += 1) {
+      const [added, deleted, inlinePath] = stats[i].replace(/^\n/, '').split('\t');
+      if (added === undefined || deleted === undefined) continue;
+      if (inlinePath === '') i += 2;
+      files[index].binary = added === '-';
+      files[index].additions = added === '-' ? 0 : Number(added);
+      files[index].deletions = deleted === '-' ? 0 : Number(deleted);
+      index += 1;
+    }
+    return files;
+  }
+
+  // Public : le processus principal vérifie l'arbre propre avant de demander confirmation d'une réécriture.
+  async assertClean() {
+    await this.#ensureRepositoryPath();
+    await this.#assertClean();
   }
 
   async #assertClean() {
@@ -302,9 +465,14 @@ export class GitService {
     if (status.files.length) throw new GitWorkbenchError('working-tree-not-clean');
   }
 
+  // Vérifie que le dossier est toujours la racine du dépôt choisi. Le résultat est gardé quelques secondes : chaque
+  // lancement de git coûte cher sous Windows et une rafale d'appels (instantané, staging) n'a besoin que d'une vérification.
+  #verifiedUntil = 0;
   async #ensureRepositoryPath() {
+    if (Date.now() < this.#verifiedUntil) return;
     const root = (await runGit(this.repositoryPath, ['rev-parse', '--show-toplevel'])).trim();
     if (path.resolve(root) !== this.repositoryPath) throw new GitWorkbenchError('repository-mismatch');
+    this.#verifiedUntil = Date.now() + 3000;
   }
 
   async #resolveCommit(revision) {

@@ -162,8 +162,6 @@ test('a rejected non-fast-forward push is not reported as success', async (t) =>
 test('a lost push acknowledgement after remote acceptance remains indeterminate without changing the local tree', async (t) => {
   const { root, repo, service } = await fixture(t);
   const bare = path.join(root, 'remote.git');
-  const shimDir = path.join(root, 'git-shim');
-  const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim();
   git(root, 'init', '--quiet', '--bare', bare);
   git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/main');
   git(repo, 'remote', 'add', 'origin', bare);
@@ -174,17 +172,10 @@ test('a lost push acknowledgement after remote acceptance remains indeterminate 
   const localHeadBefore = git(repo, 'rev-parse', 'HEAD');
   const treeBefore = git(repo, 'write-tree');
   const statusBefore = git(repo, 'status', '--porcelain=v1', '-z');
-  await mkdir(shimDir);
-  const shim = path.join(shimDir, 'git');
-  await writeFile(shim, `#!/bin/sh\nif [ "$1" = push ]; then\n  "${realGit}" "$@" || exit $?\n  exit 1\nfi\nexec "${realGit}" "$@"\n`);
-  await chmod(shim, 0o755);
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${shimDir}${path.delimiter}${originalPath}`;
-  try {
-    await assert.rejects(service.push('origin/main'), (error) => error.code === 'push-indeterminate');
-  } finally {
-    process.env.PATH = originalPath;
-  }
+  // Le côté distant accepte réellement le push puis la connexion se termine en échec : Git lance receivepack via
+  // son propre sh, ce qui simule la perte d'acquittement sans shim dans le PATH (non exécutable sous Windows).
+  git(repo, 'config', 'remote.origin.receivepack', 'accept_then_fail() { git receive-pack "$@"; exit 1; }; accept_then_fail');
+  await assert.rejects(service.push('origin/main'), (error) => error.code === 'push-indeterminate');
   assert.equal(git(bare, 'rev-parse', 'refs/heads/main'), localHeadBefore);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), localHeadBefore);
   assert.equal(git(repo, 'write-tree'), treeBefore);

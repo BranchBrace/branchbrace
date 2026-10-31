@@ -24,3 +24,6 @@ reports/
 .idea/
 .vscode/
 .DS_Store
+
+# Pinned build tools downloaded by the release scripts
+.cache/

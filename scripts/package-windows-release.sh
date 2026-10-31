@@ -13,6 +13,13 @@ fi
 
 image="${GIT_WORKBENCH_WIN_BUILD_IMAGE:-electronuserland/builder:wine}"
 
+# The image runs as root, so files it writes into the bind-mounted artifacts/
+# directory are root-owned on the host. Chown them back to the invoking user
+# before the container exits, so the host-side sha256sum/tee step below (run
+# as a normal user, e.g. the GitHub Actions runner) can read and write there.
+host_uid="$(id -u)"
+host_gid="$(id -g)"
+
 echo "Building Windows x64 installer v$version with $image"
 docker run --rm \
   -v "$PWD:/project" \
@@ -20,7 +27,7 @@ docker run --rm \
   -e ELECTRON_CACHE=/root/.cache/electron \
   -e ELECTRON_BUILDER_CACHE=/root/.cache/electron-builder \
   "$image" \
-  sh -c "npm ci && npm run package:win -- -c.extraMetadata.version=$version"
+  sh -c "npm ci && npm run package:win -- -c.extraMetadata.version=$version && chown -R $host_uid:$host_gid artifacts"
 
 exe=$(ls artifacts/*.exe 2>/dev/null | head -n 1 || true)
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then

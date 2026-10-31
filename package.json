@@ -1,0 +1,106 @@
+{
+  "name": "git-workbench",
+  "description": "Desktop client Git local, privé et sans télémétrie.",
+  "author": "MonniHermes",
+  "homepage": "https://github.com/MonniHermes/git-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && electron .\"",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "vite build && node --test",
+    "build": "vite build && electron-builder --dir",
+    "package:linux": "vite build && electron-builder --linux deb --x64",
+    "package:win": "vite build && electron-builder --win nsis --x64",
+    "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
+    "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
+  },
+  "build": {
+    "appId": "com.monnishermes.gitworkbench",
+    "productName": "Git Workbench",
+    "directories": {
+      "output": "artifacts"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "src/git.js",
+      "scripts/apply-rebase-plan.mjs",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "maintainer": "MonniHermes",
+      "synopsis": "Client Git desktop local, privé et sans télémétrie"
+    },
+    "deb": {
+      "depends": [
+        "git",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signtoolOptions": {
+        "sign": "./scripts/sign-windows.cjs",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": true
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
+    "monaco-editor": "0.57.0",
+    "vite": "^7.2.2",
+    "wait-on": "^8.0.4"
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "esbuild@0.28.2": true
+  }
+}

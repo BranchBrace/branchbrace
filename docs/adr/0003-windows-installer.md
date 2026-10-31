@@ -40,6 +40,8 @@ Antoine a choisi de valider lui-même sur son poste Windows 11 x64, faute de res
 
 ## Coût de signature (préparé, non engagé)
 
+> **Remplacé par [ADR 0004](0004-windows-code-signing.md)** : la remarque ci-dessous sur l'EV est caduque depuis 2024 (aucun certificat ne donne de réputation SmartScreen immédiate).
+
 Recherche de marché (2026), hors mandat de dépense — aucun achat effectué :
 
 | Option | Fournisseur (indicatif) | Coût annuel approx. |

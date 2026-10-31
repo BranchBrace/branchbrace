@@ -74,7 +74,13 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "signtoolOptions": {
+        "sign": "./scripts/sign-windows.cjs",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
     },
     "nsis": {
       "oneClick": false,

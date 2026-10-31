@@ -1,3 +1,11 @@
+# [1.0.0-rc.4](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-10-31)
+
+
+### Features
+
+* **windows:** sign and verify the installer in the Wine build when signing is configured ([f8a7c27](https://github.com/MonniHermes/git-workbench/commit/f8a7c27dd9113fbf40e567b892176204992449be))
+* **windows:** sign every Windows binary through a jsign electron-builder hook ([53a9b4e](https://github.com/MonniHermes/git-workbench/commit/53a9b4ee629bcf2f5702baf8504ccc5c6246e573))
+
 # [1.0.0-rc.3](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.2...v1.0.0-rc.3) (2026-10-31)
 
 

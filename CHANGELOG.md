@@ -1,3 +1,17 @@
+# [1.0.0-rc.6](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.5...v1.0.0-rc.6) (2026-10-31)
+
+
+### Bug Fixes
+
+* **rebase:** accepter un squash qui suit un commit écarté ([26c7106](https://github.com/MonniHermes/git-workbench/commit/26c7106bb19fff411bdfd4797af5655b73a61c7a))
+
+
+### Features
+
+* **ui:** éditeur Monaco, résolution de conflits, amend et rebase interactif refondu ([75f6632](https://github.com/MonniHermes/git-workbench/commit/75f66325c4f897ee8956a03983be3a2eccf3aa5b))
+* **ui:** rebase interactif plein écran, revue de commit et repères local/distant ([319c8f5](https://github.com/MonniHermes/git-workbench/commit/319c8f5294ba0be22e23f84b20a132288c0587f9))
+* **ui:** revue et correction des résolutions de conflit ([077aab9](https://github.com/MonniHermes/git-workbench/commit/077aab9b200b9fd4b2c1f8483131693038208874))
+
 # [1.0.0-rc.5](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-10-31)
 
 

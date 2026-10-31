@@ -1,3 +1,11 @@
+# [1.0.0-rc.3](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.2...v1.0.0-rc.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* build renderer before asset smoke test ([321064a](https://github.com/MonniHermes/git-workbench/commit/321064a9de9df3be16e270f9ed4121f98e3759b0))
+* load renderer assets in packaged Windows build ([66ef11f](https://github.com/MonniHermes/git-workbench/commit/66ef11fcc74809172b5ea7f0b84b6838c6db6088))
+
 # [1.0.0-rc.2](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.1...v1.0.0-rc.2) (2026-10-31)
 
 

@@ -9,25 +9,42 @@
     <script type="module" src="/main.js"></script>
   </head>
   <body>
+    <div class="tabbar"><div id="tabs" class="tabs" role="tablist" aria-label="Dépôts ouverts"></div><button id="new-tab" class="tab-add" title="Ouvrir un dépôt dans un nouvel onglet">＋</button></div>
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">G</span><span>Git Workbench</span></div>
-      <div class="repo-controls"><span id="repo-path">Aucun dépôt ouvert</span><button id="open-repo" class="button secondary">Ouvrir un dépôt</button></div>
+      <div class="brand"><span class="brand-mark">G</span></div>
+      <button id="open-repo" class="toolbar-field" title="Ouvrir un autre dépôt"><span class="eyebrow">DÉPÔT</span><strong id="repo-name">Aucun dépôt</strong></button>
+      <div class="toolbar-field"><span class="eyebrow">BRANCHE</span><strong id="branch-name">—</strong></div>
+      <nav class="toolbar" aria-label="Actions du dépôt">
+        <button id="push-button" class="tool-button" disabled><span class="tool-icon">↑</span><span>Push</span></button>
+        <button id="new-branch" class="tool-button" disabled><span class="tool-icon">⑂</span><span>Branche</span></button>
+        <button id="refresh" class="tool-button" disabled><span class="tool-icon">↻</span><span>Actualiser</span></button>
+      </nav>
+      <div class="privacy-badge" title="Pas de compte ni de télémétrie. Un push confirmé envoie les commits à l’upstream affiché; les hooks Git configurés restent actifs."><span class="privacy-dot"></span>Local par conception</div>
     </header>
     <main class="layout">
       <aside class="sidebar">
-        <section class="branch-card"><span class="eyebrow">BRANCHE COURANTE</span><strong id="branch-name">—</strong><button id="new-branch" class="button subtle">＋ Nouvelle branche</button></section>
-        <nav class="nav"><button class="nav-item active">◈ Changements <span id="change-count">0</span></button><button class="nav-item" id="history-tab">◷ Historique</button></nav>
-        <div class="sidebar-label">MODIFICATIONS</div><div id="file-list" class="file-list"></div>
-        <section class="commit-card"><label class="eyebrow" for="commit-message">MESSAGE DE COMMIT</label><textarea id="commit-message" placeholder="Décrire les changements…" rows="3"></textarea><button id="commit-button" class="button primary" disabled>Committer les changements</button></section>
+        <div class="sidebar-filter"><input id="ref-filter" class="text-input" type="search" placeholder="Filtrer les branches et tags" spellcheck="false" /></div>
+        <div id="ref-tree" class="ref-tree"></div>
       </aside>
       <section class="workspace">
-        <div class="workspace-header"><div><span class="eyebrow">ESPACE DE TRAVAIL</span><h1 id="view-title">Sélectionnez un fichier</h1><p class="capability-note">Prévisualisez le diff avant action. Le staging concerne le fichier entier, pas des hunks individuels.</p></div><button id="refresh" class="icon-button" aria-label="Actualiser">↻</button></div>
-        <div id="empty-state" class="empty-state"><div class="empty-icon">⌘</div><h2>Votre travail reste local</h2><p>Ouvrez un dépôt Git existant pour inspecter les changements, préparer un commit et publier explicitement vers son upstream.</p><button id="empty-open" class="button primary">Ouvrir un dépôt local</button></div>
+        <div class="workspace-header" id="workspace-header" hidden><button id="back-to-graph" class="button secondary compact">← Graphe</button><h1 id="view-title"></h1></div>
+        <div id="empty-state" class="empty-state"><div class="empty-icon">⌘</div><h2>Votre travail reste local</h2><p>Ouvrez un dépôt Git existant pour parcourir son graphe, préparer un commit et publier explicitement vers son upstream.</p><button id="empty-open" class="button primary">Ouvrir un dépôt local</button></div>
         <div id="diff-view" class="diff-view" hidden></div>
-        <section class="history-panel" id="history-panel" hidden><h2>Historique récent</h2><div id="history-list"></div></section>
+        <section class="graph-panel" id="graph-panel" hidden><div class="graph-row graph-head"><div class="cell refs">BRANCHE / TAG</div><div class="cell graph">GRAPHE</div><div class="cell message">MESSAGE DU COMMIT</div></div><div id="graph-rows" class="graph-rows"></div></section>
       </section>
-      <aside class="rightbar"><div class="rightbar-header"><span class="eyebrow">ACTIONS LOCALES</span></div><div class="action-group"><button id="push-button" class="action-button" disabled><span class="action-icon">↑</span><span><strong>Push</strong><small id="upstream-label">Upstream non configuré</small></span></button><button id="branches-button" class="action-button" disabled><span class="action-icon">⑂</span><span><strong>Branches</strong><small>Créer ou changer</small></span></button></div><div class="divider"></div><div class="action-group"><button id="rebase-button" class="action-button" disabled><span class="action-icon">⇢</span><span><strong>Rebase</strong><small>Réécrire explicitement</small></span></button><button id="rebase-interactive-button" class="action-button" disabled><span class="action-icon">☷</span><span><strong>Rebase interactif</strong><small>Ordonner, garder, écarter, fixer</small></span></button><button id="cherry-button" class="action-button" disabled><span class="action-icon">✣</span><span><strong>Cherry-pick</strong><small>Appliquer un commit</small></span></button></div><div class="privacy-note"><span class="privacy-dot"></span><div><strong>Local par conception</strong><p>Pas de compte ni de télémétrie. Un push confirmé envoie les commits à l’upstream affiché; les hooks Git configurés restent actifs.</p></div></div><div id="status-message" class="status-message" role="status" aria-live="polite"></div></aside>
+      <aside class="rightbar">
+        <section id="commit-details" class="commit-details" hidden></section>
+        <section id="commit-composer" class="commit-composer" hidden>
+          <div class="composer-title"><span class="tool-icon">-○-</span>Commit</div>
+          <div class="composer-box">
+            <div class="summary-line"><input id="commit-summary" class="summary-input" placeholder="Résumé du commit" spellcheck="true" /><span id="summary-count" class="summary-count">72</span></div>
+            <textarea id="commit-description" placeholder="Description" rows="5"></textarea>
+          </div>
+          <button id="commit-button" class="button primary commit-button" disabled>Indexez des changements pour committer</button>
+        </section>
+        <div id="status-message" class="status-message" role="status" aria-live="polite"></div>
+      </aside>
     </main>
-    <dialog id="confirm-dialog"><form method="dialog"><h2 id="dialog-title">Confirmer l’opération</h2><p id="dialog-body"></p><div class="dialog-actions"><button class="button secondary" value="cancel">Annuler</button><button id="dialog-confirm" class="button primary" value="confirm">Confirmer</button></div></form></dialog>
+    <div id="context-menu" class="context-menu" role="menu" hidden></div>
   </body>
 </html>

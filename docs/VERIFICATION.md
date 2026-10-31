@@ -56,6 +56,12 @@ Format retenu : installateur NSIS par utilisateur, x64 (voir `docs/adr/0003-wind
 - Signature : non signée pour cette tranche (décision « sign_later »). Coût de signature (OV/EV, non engagé) documenté dans `docs/adr/0003-windows-installer.md`.
 - Limites : seul le build dans ce conteneur Ubuntu 22.04 + Wine 11.0 est vérifié ; aucune autre méthode de build Windows n'est annoncée. macOS et ARM64 restent hors périmètre (Antoine a confirmé un poste Intel/AMD x64).
 
+### Incident CI réel constaté et corrigé (merge vers `rc`, 2026-10-31)
+
+La revue indépendante (MON-662) avait exécuté `npm run build` (sans le conteneur Wine) et validé la CI de la PR (job `quality`, qui ne construit pas l'installateur Windows). Au premier push réel sur `rc` après le merge de la PR #3 (commit `03e2b8c2`), le job `release` (`semantic-release` → `prepareCmd` → `scripts/package-windows-release.sh`) a échoué : `tee: 'artifacts/Git Workbench Setup …exe.sha256': Permission denied`. Cause : l'image `electronuserland/builder:wine` tourne en `root` ; les fichiers qu'elle écrit dans `artifacts/` (volume monté) restent root-owned sur l'hôte, alors que l'étape `sha256sum … | tee …` qui suit s'exécute hors conteneur en utilisateur normal (le runner GitHub Actions). L'étape de build NSIS elle-même avait réussi (`.exe` produit et son SHA-256 affiché dans les logs électron-builder) ; seule l'écriture du fichier `.exe.sha256` par le script échouait.
+
+Correctif (`scripts/package-windows-release.sh`) : `chown -R <uid hôte>:<gid hôte> artifacts` exécuté à l'intérieur du conteneur (encore root) juste après `npm run package:win`, avant sa sortie — rend l'hôte à nouveau propriétaire de `artifacts/` pour l'étape `tee` suivante. Reproduit et vérifié en local avant commit : build complet rejoué avec le script corrigé, `artifacts/*.exe` et `*.exe.sha256` possédés par l'utilisateur courant (plus `root`), `sha256sum -c` confirme `OK`. Correctif livré par PR dédiée vers `rc`, avec le même exigence de revue indépendante (Miki) avant fusion ; voir l'historique Git pour le commit et le run CI qui a validé le second push.
+
 ## Sécurité et confidentialité — limites explicites
 
 - Le processus Git est lancé par `spawn('git', args, { shell: false })` ; les chemins de fichiers sont passés après `--`. Electron utilise `contextIsolation`, `sandbox`, `webSecurity`, `nodeIntegration: false`, navigation externe bloquée et CSP `connect-src 'none'`.

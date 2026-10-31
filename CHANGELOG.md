@@ -1,3 +1,15 @@
+# [1.0.0-rc.5](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-10-31)
+
+
+### Bug Fixes
+
+* **ui:** ne confirmer que le push et les rebases ([f0dcf35](https://github.com/MonniHermes/git-workbench/commit/f0dcf3563344513801d58c3ea3b4439ce9cff9eb))
+
+
+### Features
+
+* **ui:** refonte de l'interface façon GitKraken, retrait du module Rust et refus visibles des commandes ([025291e](https://github.com/MonniHermes/git-workbench/commit/025291e78c5a35beead364689560dba7c3fb76f8))
+
 # [1.0.0-rc.4](https://github.com/MonniHermes/git-workbench/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-10-31)
 
 

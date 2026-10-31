@@ -32,7 +32,20 @@ function createWindow() {
     if (process.env.GIT_WORKBENCH_SMOKE === '1') {
       const ready = await mainWindow.webContents.executeJavaScript("document.title === 'Git Workbench' && Boolean(window.workbench)");
       console.log(ready ? 'Desktop window and isolated preload loaded.' : 'Desktop smoke check failed.');
-      app.exit(ready ? 0 : 1);
+      if (!ready || !process.env.GIT_WORKBENCH_SMOKE_REPO) return app.exit(ready ? 0 : 1);
+      try {
+        const candidate = new GitService(process.env.GIT_WORKBENCH_SMOKE_REPO);
+        await candidate.verifyRepository();
+        repository = candidate;
+        const summary = await mainWindow.webContents.executeJavaScript(
+          'window.workbench.refresh().then((r) => ({ branch: r.status.branch, files: r.status.files.length, commits: r.history.length, subject: r.history[0]?.subject }))',
+        );
+        console.log(`Repository read through preload IPC: ${JSON.stringify(summary)}`);
+        app.exit(summary.commits > 0 ? 0 : 1);
+      } catch (error) {
+        console.log(`Repository smoke check failed: ${error?.code || error?.message || 'unknown'}`);
+        app.exit(1);
+      }
     }
   });
   if (app.isPackaged) mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));

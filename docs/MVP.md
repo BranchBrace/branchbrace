@@ -39,7 +39,17 @@ No hosted service, account, or telemetry by default. Inspection, history, diffs,
 
 ## Explicitly out of scope for v1
 
-Clone/init; branch deletion; local merge; automatic fetch/pull; integrated conflict resolution; PR/MR and hosting-provider integrations; cloud accounts or collaboration; file editing; AI, extensions, automatic hooks; force-push, reset, discard, amend/squash; stash management; submodules/worktrees; server/CI runtime; auto-update or package publication.
+Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation and hosting-provider APIs; cloud accounts or collaboration; AI, extensions, automatic hooks; force-push, reset, discard; stash management; submodules/worktrees; server/CI runtime; auto-update or package publication.
+
+## Added after v1 (explicit user actions only)
+
+- B1. Explicit fetch (`git fetch --all --prune`): updates remote-tracking refs only. The branch panel shows, per local branch, whether it is in sync, ahead/behind, local-only or whose upstream is gone, and groups remote branches by remote with a "remote only" marker; a remote-only branch can be checked out as a tracking branch. The remote web page (GitHub, GitLab…) is derived from the Git URL with credentials stripped and opened only on click.
+- B2. Diffs use the Monaco diff editor (side-by-side or inline, collapsed unchanged regions, word-level highlighting). An unstaged file's working copy is editable from the diff.
+- B3. Integrated file editor (Monaco): explorer of tracked and untracked non-ignored files, tabs, quick open (Ctrl+P), save (Ctrl+S). It only writes existing text files inside the repository (no `..`, absolute paths, `.git/` or symlink escapes).
+- B4. Integrated conflict resolution for an interrupted rebase, cherry-pick, merge or revert: both sides against their common base, an editable result with per-conflict actions, save-and-stage, then continue, skip or abort (skip and abort ask for confirmation).
+- B5. Amend of the last commit (message and/or staged content) with a recovery ref; confirmation only when the commit is already on its upstream.
+- B6. Interactive rebase supports pick, reword, squash, fixup and drop, with the final messages chosen before the rebase starts and reapplied after a conflict.
+- B7. Conventional Commits helper for the commit summary; quick access to the repository folder and a terminal opened in it.
 
 ## Architecture and delivery decisions
 

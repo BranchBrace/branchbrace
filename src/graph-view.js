@@ -58,19 +58,31 @@ function refLabels(refs) {
   }
   if (refs.some((item) => item.type === 'head')) labels.unshift({ text: 'HEAD', local: false, remote: false, head: true });
   for (const ref of refs.filter((item) => item.type === 'tag')) labels.push({ text: ref.name, tag: true, tagName: ref.name });
-  return labels.sort((a, b) => Number(b.head) - Number(a.head));
+  // HEAD d'abord, puis les branches locales, les distantes et enfin les tags.
+  const rank = (label) => (label.head ? 0 : label.local ? 1 : label.remote ? 2 : 3);
+  return labels.sort((a, b) => rank(a) - rank(b));
 }
 
-function labelChip(label, color, handlers) {
+// Infobulle : où en est une branche locale par rapport à sa distante.
+function trackingText(label, refs) {
+  const local = refs?.local?.find((ref) => ref.name === label.branch);
+  if (!local) return '';
+  if (local.gone) return `\nSa distante ${local.upstream} a été supprimée.`;
+  if (!local.upstream) return '\nSeulement sur cet ordinateur : jamais poussée.';
+  if (!local.ahead && !local.behind) return `\nÀ jour avec ${local.upstream}.`;
+  return `\n${local.ahead ? `${local.ahead} commit(s) à pousser` : ''}${local.ahead && local.behind ? ', ' : ''}${local.behind ? `${local.behind} à récupérer` : ''} (${local.upstream}).`;
+}
+
+function labelChip(label, color, handlers, refs) {
   const chip = document.createElement('span');
-  chip.className = `ref-chip${label.head ? ' head' : ''}${label.tag ? ' tag' : ''}`;
+  chip.className = `ref-chip${label.head ? ' head' : ''}${label.tag ? ' tag' : ''}${!label.local && label.remote ? ' remote' : ''}`;
   chip.style.setProperty('--lane', color);
   const name = document.createElement('span'); name.className = 'ref-chip-name';
-  name.textContent = `${label.head ? '✓ ' : ''}${label.tag ? '◆ ' : ''}${label.text}`;
+  name.textContent = `${label.head ? '✓ ' : ''}${label.tag ? '◆ ' : ''}${!label.local && label.remote ? '☁ ' : ''}${label.text}`;
   const icons = document.createElement('span'); icons.className = 'ref-chip-icons';
-  icons.textContent = `${label.local ? '⌂' : ''}${label.remote ? '☁' : ''}`;
+  icons.textContent = label.local ? `⌂${label.remote ? '☁' : ''}` : '';
   chip.append(name, icons);
-  chip.title = label.tag ? `Tag ${label.text}` : label.local ? `Branche locale ${label.text}${label.remote ? ' (avec sa distante au même commit)' : ''}${label.head ? '' : ' — double-clic pour basculer'}` : `Branche distante ${label.text}`;
+  chip.title = label.tag ? `Tag ${label.text}` : label.local ? `Branche locale ${label.text}${label.remote ? ' — sa distante pointe sur le même commit' : ''}${trackingText(label, refs)}${label.head ? '' : '\nDouble-clic pour basculer'}` : `Branche distante ${label.text} (sur le serveur, pas en local à ce commit)`;
   if (label.branch) chip.addEventListener('dblclick', (event) => { event.stopPropagation(); if (!label.head) handlers.onCheckout(label.branch); });
   const ref = label.branch ? ['local', label.branch] : label.remoteName ? ['remote', label.remoteName] : label.tagName ? ['tags', label.tagName] : null;
   if (ref) chip.addEventListener('contextmenu', (event) => { event.preventDefault(); event.stopPropagation(); handlers.onRefMenu(ref[0], ref[1], event.clientX, event.clientY); });
@@ -88,7 +100,7 @@ function node(drawing, commit, cx, color, isWip) {
   drawing.append(text);
 }
 
-export function renderGraph(container, { commits, head, wip, selected }, handlers) {
+export function renderGraph(container, { commits, head, wip, selected, refs }, handlers) {
   const rows = wip && head ? [{ hash: WIP, parents: [head], author: '', timestamp: Date.now() / 1000, refs: [], subject: '', summary: '' }, ...commits] : commits;
   const layout = layoutGraph(rows);
   const graphWidth = PAD * 2 + Math.max(layout.width, 1) * LANE;
@@ -109,10 +121,10 @@ export function renderGraph(container, { commits, head, wip, selected }, handler
 
     const refsCell = document.createElement('div'); refsCell.className = 'cell refs';
     if (labels.length) {
-      refsCell.append(labelChip(labels[0], color, handlers));
+      refsCell.append(labelChip(labels[0], color, handlers, refs));
       if (labels.length > 1) {
         const more = document.createElement('span'); more.className = 'ref-more'; more.textContent = `+${labels.length - 1}`;
-        more.title = labels.slice(1).map((label) => label.text).join('\n');
+        more.title = labels.slice(1).map((label) => `${label.tag ? '◆' : label.local ? '⌂' : '☁'} ${label.text}`).join('\n');
         refsCell.append(more);
       }
     }

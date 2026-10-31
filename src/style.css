@@ -82,10 +82,7 @@ button.toolbar-field:hover{background:#182b42}
 .empty-icon{font-size:34px;color:var(--accent)}
 .empty-state h2{font-size:19px;margin:13px 0 7px}
 .empty-state p{line-height:1.7;color:#81afb5;margin:0 auto 19px;max-width:350px}
-.diff-view{overflow:auto;flex:1;padding:14px 18px;font:12px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#c3dfdc}
-.diff-add{color:#b7d974;background:#1a3330}
-.diff-del{color:#e08a8f;background:#2e1a2c}
-.diff-hunk{color:#3fa0a4}
+.diff-view{flex:1;min-height:0;position:relative}
 
 /* Graphe */
 .graph-panel{flex:1;min-height:0;display:flex;flex-direction:column}

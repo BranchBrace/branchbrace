@@ -3,9 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Git Workbench</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/views.css" />
     <script type="module" src="/main.js"></script>
   </head>
   <body>
@@ -15,9 +16,17 @@
       <button id="open-repo" class="toolbar-field" title="Ouvrir un autre dépôt"><span class="eyebrow">DÉPÔT</span><strong id="repo-name">Aucun dépôt</strong></button>
       <div class="toolbar-field"><span class="eyebrow">BRANCHE</span><strong id="branch-name">—</strong></div>
       <nav class="toolbar" aria-label="Actions du dépôt">
+        <button id="fetch-button" class="tool-button" disabled title="Récupérer les branches des dépôts distants (git fetch --all --prune)"><span class="tool-icon">⤓</span><span>Fetch</span></button>
         <button id="push-button" class="tool-button" disabled><span class="tool-icon">↑</span><span>Push</span></button>
         <button id="new-branch" class="tool-button" disabled><span class="tool-icon">⑂</span><span>Branche</span></button>
         <button id="refresh" class="tool-button" disabled><span class="tool-icon">↻</span><span>Actualiser</span></button>
+        <span class="toolbar-separator"></span>
+        <div class="view-switch" role="tablist" aria-label="Vue">
+          <button id="view-graph" class="view-button active" role="tab" disabled title="Graphe des commits"><span class="tool-icon">◫</span><span>Graphe</span></button>
+          <button id="view-editor" class="view-button" role="tab" disabled title="Éditeur de fichiers (Ctrl+P pour ouvrir un fichier)"><span class="tool-icon">‹/›</span><span>Éditeur</span></button>
+        </div>
+        <span class="toolbar-separator"></span>
+        <button id="folder-button" class="tool-button" disabled title="Ouvrir le dossier du dépôt, un terminal…"><span class="tool-icon">▤</span><span>Dossier ▾</span></button>
       </nav>
       <div class="privacy-badge" title="Pas de compte ni de télémétrie. Un push confirmé envoie les commits à l’upstream affiché; les hooks Git configurés restent actifs."><span class="privacy-dot"></span>Local par conception</div>
     </header>
@@ -27,17 +36,20 @@
         <div id="ref-tree" class="ref-tree"></div>
       </aside>
       <section class="workspace">
-        <div class="workspace-header" id="workspace-header" hidden><button id="back-to-graph" class="button secondary compact">← Graphe</button><h1 id="view-title"></h1></div>
+        <div id="operation-banner" class="operation-banner" hidden></div>
+        <div class="workspace-header" id="workspace-header" hidden><button id="back-to-graph" class="button secondary compact">← Graphe</button><h1 id="view-title"></h1><div id="view-tools" class="view-tools"></div></div>
         <div id="empty-state" class="empty-state"><div class="empty-icon">⌘</div><h2>Votre travail reste local</h2><p>Ouvrez un dépôt Git existant pour parcourir son graphe, préparer un commit et publier explicitement vers son upstream.</p><button id="empty-open" class="button primary">Ouvrir un dépôt local</button></div>
         <div id="diff-view" class="diff-view" hidden></div>
+        <div id="editor-view" class="editor-view" hidden></div>
+        <div id="conflict-view" class="conflict-view" hidden></div>
         <section class="graph-panel" id="graph-panel" hidden><div class="graph-row graph-head"><div class="cell refs">BRANCHE / TAG</div><div class="cell graph">GRAPHE</div><div class="cell message">MESSAGE DU COMMIT</div></div><div id="graph-rows" class="graph-rows"></div></section>
       </section>
       <aside class="rightbar">
         <section id="commit-details" class="commit-details" hidden></section>
         <section id="commit-composer" class="commit-composer" hidden>
-          <div class="composer-title"><span class="tool-icon">-○-</span>Commit</div>
+          <div class="composer-title"><span class="tool-icon">-○-</span><span id="composer-label">Commit</span><label class="amend-toggle" title="Remplacer le dernier commit par l’index courant et ce message"><input id="amend-toggle" type="checkbox" /><span class="switch"></span>Amender</label></div>
           <div class="composer-box">
-            <div class="summary-line"><input id="commit-summary" class="summary-input" placeholder="Résumé du commit" spellcheck="true" /><span id="summary-count" class="summary-count">72</span></div>
+            <div class="summary-line"><button id="conventional-button" class="cc-button" type="button" title="Composer un message Conventional Commits (type, portée, rupture)">cc</button><input id="commit-summary" class="summary-input" placeholder="Résumé du commit" spellcheck="true" /><span id="summary-count" class="summary-count">72</span></div>
             <textarea id="commit-description" placeholder="Description" rows="5"></textarea>
           </div>
           <button id="commit-button" class="button primary commit-button" disabled>Indexez des changements pour committer</button>

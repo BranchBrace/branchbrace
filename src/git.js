@@ -1,12 +1,16 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
+// Au-delà, un fichier n'est ni affiché dans l'éditeur ni comparé : Monaco resterait utilisable mais la page ralentirait.
+const MAX_EDITABLE = 5 * 1024 * 1024;
+// Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
+const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+const REBASE_ACTIONS = ['pick', 'reword', 'squash', 'fixup', 'drop'];
 
 // Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
 // Héritées de l'environnement du processus hôte, elles peuvent détourner une
@@ -93,6 +97,7 @@ function classifyFailure(args, stderr) {
   if (text.includes('conflict') || text.includes('could not apply') || text.includes('fix conflicts')) return 'conflict';
   if (args[0] === 'push' && (text.includes('rejected') || text.includes('non-fast-forward'))) return 'push-rejected';
   if (args[0] === 'push') return 'push-indeterminate';
+  if (args[0] === 'fetch') return 'fetch-failed';
   if (text.includes('not a git repository')) return 'not-a-repository';
   if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
   return 'git-operation-failed';
@@ -136,7 +141,8 @@ function parseStatus(raw) {
       i += 1;
       originalPath = fields[i] || null;
     }
-    files.push({ path: filePath, originalPath, indexStatus: x, worktreeStatus: y, staged: x !== ' ' && x !== '?', unstaged: y !== ' ', untracked: x === '?' && y === '?' });
+    const conflicted = CONFLICT_CODES.has(x + y);
+    files.push({ path: filePath, originalPath, indexStatus: x, worktreeStatus: y, staged: !conflicted && x !== ' ' && x !== '?', unstaged: !conflicted && y !== ' ', untracked: x === '?' && y === '?', conflicted });
   }
   return { files, ...header };
 }
@@ -154,6 +160,31 @@ function parseDecorations(raw) {
   }
   return refs;
 }
+
+// URL web d'un dépôt distant (GitHub, GitLab…) déduite de son URL Git, sans jamais renvoyer d'identifiants : un
+// éventuel « user:token@ » d'une URL HTTPS est retiré. Seules les formes https, ssh et scp (git@hôte:chemin) sont lues.
+export function remoteWebUrl(url) {
+  if (typeof url !== 'string' || !url) return null;
+  let host;
+  let pathname;
+  const scp = /^(?:[^@/\s]+@)?([a-z0-9.-]+):(?!\/\/)([^\s]+)$/i.exec(url);
+  if (scp) [, host, pathname] = scp;
+  else {
+    try {
+      const parsed = new URL(url);
+      if (!['https:', 'http:', 'ssh:', 'git:'].includes(parsed.protocol)) return null;
+      host = parsed.hostname;
+      pathname = parsed.pathname;
+    } catch { return null; }
+  }
+  pathname = pathname.replace(/^\/+/, '').replace(/\.git\/?$/, '').replace(/\/+$/, '');
+  if (!host || !pathname || !/^[a-z0-9.-]+$/i.test(host)) return null;
+  const provider = /(^|\.)github\.com$/i.test(host) ? 'github' : /gitlab/i.test(host) ? 'gitlab' : /bitbucket/i.test(host) ? 'bitbucket' : 'git';
+  return { host, path: pathname, provider, web: `https://${host}/${pathname}` };
+}
+
+// Contenu lu par Git ou sur disque : un octet nul signale un fichier binaire, qu'on ne montre pas comme du texte.
+const isBinary = (text) => typeof text === 'string' && text.slice(0, 8000).includes('\0');
 
 // Packaged Electron's execPath is the app binary: without this flag the rebase plan editor
 // would start a second app window instead of running the script (which lives inside app.asar).
@@ -176,7 +207,29 @@ export class GitService {
   // Un seul lancement de git : l'en-tête `--branch` donne aussi la branche courante et son upstream.
   async status() {
     await this.#ensureRepositoryPath();
-    return parseStatus(await runGit(this.repositoryPath, ['status', '--porcelain=v1', '--branch', '-z', '--untracked-files=all']));
+    const [raw, operation] = await Promise.all([
+      runGit(this.repositoryPath, ['status', '--porcelain=v1', '--branch', '-z', '--untracked-files=all']),
+      this.operation(),
+    ]);
+    return { ...parseStatus(raw), operation };
+  }
+
+  // Opération Git interrompue (en général par un conflit) qu'il reste à continuer ou annuler.
+  async operation() {
+    const directory = await this.#gitDirectory();
+    const has = (name) => existsSync(path.join(directory, name));
+    if (has('rebase-merge') || has('rebase-apply')) return 'rebase';
+    if (has('MERGE_HEAD')) return 'merge';
+    if (has('CHERRY_PICK_HEAD')) return 'cherry-pick';
+    if (has('REVERT_HEAD')) return 'revert';
+    return null;
+  }
+
+  // Récupère les branches de tous les dépôts distants. `--prune` retire les copies locales des branches supprimées
+  // côté serveur : seules des références de suivi changent, jamais une branche locale ni l'arbre de travail.
+  async fetch() {
+    await this.#ensureRepositoryPath();
+    await runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules']);
   }
 
   // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.
@@ -329,8 +382,16 @@ export class GitService {
 
   async references() {
     await this.#ensureRepositoryPath();
-    const raw = await runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)', 'refs/heads', 'refs/remotes', 'refs/tags']);
-    const result = { local: [], remote: [], tags: [] };
+    const [raw, urls] = await Promise.all([
+      runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)', 'refs/heads', 'refs/remotes', 'refs/tags']),
+      runGit(this.repositoryPath, ['config', '--get-regexp', '^remote\\..*\\.url$'], { acceptExitCodes: [1] }),
+    ]);
+    // Dépôts distants configurés et leur page web : l'URL Git brute (qui peut contenir un jeton) ne quitte pas ce module.
+    const remotes = urls.split('\n').filter(Boolean).map((line) => {
+      const [key, ...value] = line.split(' ');
+      return { name: key.slice(7, -4), ...(remoteWebUrl(value.join(' ')) || { host: null, path: null, provider: 'git', web: null }) };
+    }).sort((a, b) => b.name.length - a.name.length);
+    const result = { local: [], remote: [], tags: [], remotes: [] };
     for (const line of raw.split('\n').filter(Boolean)) {
       // %(*objectname) est le commit pointé par un tag annoté.
       const [ref, object, peeled, head, upstream, track] = line.split('\0');
@@ -338,10 +399,19 @@ export class GitService {
       if (ref.startsWith('refs/heads/')) {
         const ahead = Number(/ahead (\d+)/.exec(track)?.[1] || 0);
         const behind = Number(/behind (\d+)/.exec(track)?.[1] || 0);
-        result.local.push({ name: ref.slice(11), hash, current: head === '*', upstream: upstream || null, ahead, behind });
-      } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) result.remote.push({ name: ref.slice(13), hash });
-      else if (ref.startsWith('refs/tags/')) result.tags.push({ name: ref.slice(10), hash });
+        result.local.push({ name: ref.slice(11), hash, current: head === '*', upstream: upstream || null, gone: track === 'gone', ahead, behind });
+      } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) {
+        const name = ref.slice(13);
+        // Un nom de remote peut contenir « / » : on retient le plus long remote configuré qui préfixe la référence.
+        const remote = remotes.find((item) => name.startsWith(`${item.name}/`))?.name ?? name.slice(0, name.indexOf('/'));
+        result.remote.push({ name, hash, remote, branch: name.slice(remote.length + 1), trackedBy: null });
+      } else if (ref.startsWith('refs/tags/')) result.tags.push({ name: ref.slice(10), hash });
     }
+    for (const local of result.local) {
+      const tracked = result.remote.find((item) => item.name === local.upstream);
+      if (tracked) tracked.trackedBy = local.name;
+    }
+    result.remotes = remotes.sort((a, b) => a.name.localeCompare(b.name));
     return result;
   }
 
@@ -352,6 +422,151 @@ export class GitService {
     if (!branches.some((branch) => branch.name === name)) throw new GitWorkbenchError('branch-not-found');
     await runGit(this.repositoryPath, ['switch', name]);
     return this.status();
+  }
+
+  // Branche présente seulement sur le dépôt distant : crée la branche locale du même nom qui la suit, puis bascule.
+  async checkoutRemote(remoteName) {
+    await this.#ensureRepositoryPath();
+    const { local, remote } = await this.references();
+    const target = remote.find((item) => item.name === remoteName);
+    if (!target) throw new GitWorkbenchError('branch-not-found');
+    if (local.some((item) => item.name === target.branch)) throw new GitWorkbenchError('branch-exists');
+    await runGit(this.repositoryPath, ['switch', '--track', target.name]);
+    return this.status();
+  }
+
+  // Message complet du dernier commit, proposé pour le modifier lors d'un amend.
+  async headMessage() {
+    await this.#ensureRepositoryPath();
+    const raw = await runGit(this.repositoryPath, ['log', '-1', '--format=%B'], { acceptExitCodes: [128] }).catch(() => '');
+    return raw.trimEnd();
+  }
+
+  // Le dernier commit est-il déjà sur l'upstream ? L'amender ferait alors diverger la branche de sa distante.
+  async headPublished() {
+    await this.#ensureRepositoryPath();
+    return runGit(this.repositoryPath, ['merge-base', '--is-ancestor', 'HEAD', '@{upstream}']).then(() => true, () => false);
+  }
+
+  // Remplace le dernier commit par l'index courant et ce message. Un point de récupération garde l'ancien commit.
+  async amend(message) {
+    await this.#ensureRepositoryPath();
+    if (typeof message !== 'string' || !message.trim()) throw new GitWorkbenchError('commit-message-required');
+    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    const recoveryRef = await this.#saveRecoveryRef('amend');
+    await runGit(this.repositoryPath, ['commit', '--amend', '-m', message]);
+    const hash = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    return { hash, recoveryRef };
+  }
+
+  // Versions avant/après d'un fichier du WIP pour l'éditeur de diff : index → arbre de travail, ou HEAD → index.
+  async workingVersions(filePath, staged = false) {
+    const entry = await this.#statusEntry(filePath);
+    if (staged) {
+      const [original, modified] = await Promise.all([this.#blob(`HEAD:${entry.originalPath || filePath}`), this.#blob(`:${filePath}`)]);
+      return this.#versions(original, modified, { editable: false });
+    }
+    const [original, working] = await Promise.all([
+      entry.untracked ? null : this.#blob(`:${filePath}`),
+      entry.worktreeStatus === 'D' ? null : this.readWorkingFile(filePath).catch(() => null),
+    ]);
+    if (working?.tooLarge) return { tooLarge: true };
+    if (working?.binary) return { binary: true };
+    return this.#versions(original, working?.content ?? null, { editable: Boolean(working) });
+  }
+
+  // Versions d'un fichier dans un commit, comparé à son premier parent (vide pour un commit racine).
+  async commitVersions(revision, filePath) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(revision);
+    const entry = (await this.#commitFiles(hash)).find((file) => file.path === filePath);
+    if (!entry) throw new GitWorkbenchError('file-not-in-commit');
+    const parent = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ')[1];
+    const [original, modified] = await Promise.all([
+      parent && entry.status !== 'A' ? this.#blob(`${parent}:${entry.originalPath || filePath}`) : null,
+      entry.status === 'D' ? null : this.#blob(`${hash}:${filePath}`),
+    ]);
+    return this.#versions(original, modified, { editable: false });
+  }
+
+  // Fichiers de l'arbre de travail pour l'explorateur de l'éditeur : suivis et non suivis, hors fichiers ignorés.
+  async listFiles() {
+    await this.#ensureRepositoryPath();
+    const raw = await runGit(this.repositoryPath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+    return [...new Set(raw.split('\0').filter(Boolean))].filter((file) => existsSync(path.join(this.repositoryPath, file))).sort();
+  }
+
+  async readWorkingFile(filePath) {
+    const absolute = await this.#workingPath(filePath);
+    const info = await stat(absolute);
+    if (!info.isFile()) throw new GitWorkbenchError('invalid-path');
+    if (info.size > MAX_EDITABLE) return { tooLarge: true, binary: false, content: null };
+    const content = await readFile(absolute, 'utf8');
+    return isBinary(content) ? { binary: true, content: null } : { binary: false, content };
+  }
+
+  // N'écrit que dans un fichier texte existant du dépôt : l'éditeur ne crée ni ne supprime de fichier.
+  async writeWorkingFile(filePath, content) {
+    if (typeof content !== 'string') throw new GitWorkbenchError('invalid-content');
+    const current = await this.readWorkingFile(filePath);
+    if (current.binary || current.tooLarge) throw new GitWorkbenchError('file-not-editable');
+    await writeFile(await this.#workingPath(filePath), content, 'utf8');
+    return this.status();
+  }
+
+  // Les trois versions d'un fichier en conflit (base commune, côté courant, côté entrant) et le fichier avec marqueurs.
+  async conflictVersions(filePath) {
+    const entry = await this.#statusEntry(filePath);
+    if (!entry.conflicted) throw new GitWorkbenchError('file-not-in-conflict');
+    const [base, ours, theirs, working, operation] = await Promise.all([
+      this.#blob(`:1:${filePath}`), this.#blob(`:2:${filePath}`), this.#blob(`:3:${filePath}`),
+      this.readWorkingFile(filePath).catch(() => null), this.operation(),
+    ]);
+    const binary = [base, ours, theirs].some(isBinary) || Boolean(working?.binary);
+    return {
+      path: filePath, operation, code: entry.indexStatus + entry.worktreeStatus, binary,
+      base: binary ? null : base, ours: binary ? null : ours, theirs: binary ? null : theirs,
+      merged: binary ? null : working?.content ?? null,
+    };
+  }
+
+  // Enregistre la résolution choisie puis marque le fichier résolu (`git add`), ou le supprime si `content` est null.
+  async resolveConflict(filePath, content) {
+    const entry = await this.#statusEntry(filePath);
+    if (!entry.conflicted) throw new GitWorkbenchError('file-not-in-conflict');
+    if (content === null) { await runGit(this.repositoryPath, ['rm', '--quiet', '--', filePath]); return this.status(); }
+    if (typeof content !== 'string') throw new GitWorkbenchError('invalid-content');
+    await writeFile(await this.#workingPath(filePath, { allowMissing: true }), content, 'utf8');
+    await runGit(this.repositoryPath, ['add', '--', filePath]);
+    return this.status();
+  }
+
+  // Reprend l'opération interrompue une fois tous les conflits résolus. GIT_EDITOR=true garde le message proposé
+  // par Git (celui du commit rejoué) au lieu d'ouvrir un éditeur que personne ne verrait.
+  async continueOperation() {
+    const operation = await this.#pendingOperation();
+    if ((await this.status()).files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    try { await runGit(this.repositoryPath, [operation, '--continue'], { env: await this.#operationEditors(operation) }); }
+    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
+    finally { await this.#cleanupRebasePlan(); }
+    return { operation, status: await this.status() };
+  }
+
+  // Passe le commit en cours de rejeu (rebase, cherry-pick) : ses changements ne seront pas appliqués.
+  async skipOperation() {
+    const operation = await this.#pendingOperation();
+    if (operation === 'merge') throw new GitWorkbenchError('operation-cannot-skip');
+    try { await runGit(this.repositoryPath, [operation, '--skip'], { env: await this.#operationEditors(operation) }); }
+    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
+    finally { await this.#cleanupRebasePlan(); }
+    return { operation, status: await this.status() };
+  }
+
+  async abortOperation() {
+    const operation = await this.#pendingOperation();
+    await runGit(this.repositoryPath, [operation, '--abort']);
+    await this.#cleanupRebasePlan();
+    return { operation, status: await this.status() };
   }
 
   async cherryPick(commit) {
@@ -383,13 +598,13 @@ export class GitService {
   async interactiveRebaseCommits(upstream) {
     await this.#ensureRepositoryPath();
     const target = await this.#resolveCommit(upstream);
-    const raw = await runGit(this.repositoryPath, ['rev-list', '--reverse', `${target}..HEAD`]);
-    const commits = [];
-    for (const hash of raw.split('\n').filter(Boolean)) {
-      const record = await runGit(this.repositoryPath, ['show', '-s', '--format=%H%x00%h%x00%s', hash]);
-      const fields = record.trimEnd().split('\0');
-      commits.push({ hash: fields[0], shortHash: fields[1], subject: fields.slice(2).join('\0') });
-    }
+    // Mêmes commits, dans le même ordre, que la liste que Git proposera (sans les merges, que le rebase aplatit).
+    const raw = await runGit(this.repositoryPath, ['log', '--reverse', '--no-merges', '--format=%H%x00%h%x00%an%x00%at%x00%B%x1e', `${target}..HEAD`]);
+    const commits = raw.split('\x1e').map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
+      const [hash, shortHash, author, timestamp, ...body] = record.split('\0');
+      const message = body.join('\0').trimEnd();
+      return { hash, shortHash, author, timestamp: Number(timestamp), subject: message.split('\n')[0], message };
+    });
     return { upstream: target, commits };
   }
 
@@ -398,26 +613,93 @@ export class GitService {
     await this.#assertClean();
     if (!Array.isArray(plan) || plan.length !== commits.length || new Set(plan.map((item) => item?.hash)).size !== commits.length) throw new GitWorkbenchError('invalid-rebase-plan');
     const validHashes = new Set(commits.map((item) => item.hash));
-    if (plan.some((item) => !validHashes.has(item.hash) || !['pick', 'drop', 'fixup'].includes(item.action))) throw new GitWorkbenchError('invalid-rebase-plan');
+    if (plan.some((item) => !validHashes.has(item?.hash) || !REBASE_ACTIONS.includes(item.action))) throw new GitWorkbenchError('invalid-rebase-plan');
+    // reword et squash portent le message final choisi (celui d'un squash est le message du groupe fusionné).
+    if (plan.some((item) => (item.action === 'reword' || item.action === 'squash') && (typeof item.message !== 'string' || !item.message.trim()))) throw new GitWorkbenchError('invalid-rebase-plan');
     let previousCanFixup = false;
     for (const item of plan) {
-      if (item.action === 'fixup' && !previousCanFixup) throw new GitWorkbenchError('invalid-rebase-plan');
+      if ((item.action === 'fixup' || item.action === 'squash') && !previousCanFixup) throw new GitWorkbenchError('invalid-rebase-plan');
       previousCanFixup = item.action !== 'drop';
     }
+    if (plan.every((item) => item.action === 'drop')) throw new GitWorkbenchError('invalid-rebase-plan');
+    const steps = plan.map(({ hash, action, message }) => ((action === 'reword' || action === 'squash' || (action === 'fixup' && typeof message === 'string')) ? { hash, action, message } : { hash, action }));
     const recoveryRef = await this.#saveRecoveryRef('interactive-rebase');
-    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-rebase-'));
-    const planPath = path.join(tempDirectory, 'plan.json');
-    const editorPath = fileURLToPath(new URL('../scripts/apply-rebase-plan.mjs', import.meta.url));
-    await writeFile(planPath, JSON.stringify(plan), { mode: 0o600 });
+    // Le plan reste dans le dossier .git tant que le rebase n'est pas terminé : après un conflit, « Continuer »
+    // en a encore besoin pour appliquer les messages des reword/squash restants.
+    await writeFile(await this.#rebasePlanPath(), JSON.stringify(steps), { mode: 0o600 });
+    try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { ...await this.#rebaseEditors(), GIT_SEQUENCE_EDITOR: this.#rebaseEditorCommand() } }); }
+    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
+    finally { await this.#cleanupRebasePlan(); }
+    return { recoveryRef, status: await this.status() };
+  }
+
+  async #rebasePlanPath() { return path.join(await this.#gitDirectory(), 'git-workbench-rebase-plan.json'); }
+
+  #rebaseEditorCommand() {
     const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-    const sequenceEditor = `${sequenceEditorRuntimePrefix()}${quote(process.execPath)} ${quote(editorPath)} ${quote(planPath)}`;
-    try {
-      try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { GIT_SEQUENCE_EDITOR: sequenceEditor, GIT_WORKBENCH_REBASE_PLAN: planPath } }); }
-      catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
-      return { recoveryRef, status: await this.status() };
-    } finally {
-      await rm(tempDirectory, { recursive: true, force: true });
-    }
+    const editorPath = fileURLToPath(new URL('../scripts/apply-rebase-plan.mjs', import.meta.url));
+    return `${sequenceEditorRuntimePrefix()}${quote(process.execPath)} ${quote(editorPath)}`;
+  }
+
+  // Éditeur de messages : celui du plan s'il en reste un (rebase interactif lancé ici), sinon le message proposé par Git.
+  async #rebaseEditors() {
+    const planPath = await this.#rebasePlanPath();
+    if (!existsSync(planPath)) return { GIT_EDITOR: 'true' };
+    return { GIT_EDITOR: this.#rebaseEditorCommand(), GIT_WORKBENCH_REBASE_PLAN: planPath, GIT_WORKBENCH_REBASE_DONE: path.join(await this.#gitDirectory(), 'rebase-merge', 'done') };
+  }
+
+  async #cleanupRebasePlan() {
+    if (await this.operation() !== 'rebase') await rm(await this.#rebasePlanPath(), { force: true });
+  }
+
+  // Contenu d'un blob (`HEAD:chemin`, `:chemin` pour l'index, `:2:chemin` pour un côté de conflit) ; null s'il n'existe pas.
+  async #blob(spec) {
+    if (spec.includes('\0')) throw new GitWorkbenchError('invalid-path');
+    return runGit(this.repositoryPath, ['cat-file', 'blob', spec]).catch((error) => {
+      if (error.code === 'git-output-too-large') throw error;
+      return null;
+    });
+  }
+
+  #versions(original, modified, { editable }) {
+    if (isBinary(original) || isBinary(modified)) return { binary: true };
+    if ((original?.length || 0) > MAX_EDITABLE || (modified?.length || 0) > MAX_EDITABLE) return { tooLarge: true };
+    return { original: original ?? '', modified: modified ?? '', existsBefore: original !== null, existsAfter: modified !== null, editable };
+  }
+
+  // Chemin relatif au dépôt → chemin absolu, refusé s'il sort du dépôt (« .. », chemin absolu, lien symbolique) ou
+  // s'il vise le dossier .git.
+  async #workingPath(filePath, { allowMissing = false } = {}) {
+    await this.#ensureRepositoryPath();
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || path.isAbsolute(filePath) || /^[a-z]:/i.test(filePath)) throw new GitWorkbenchError('invalid-path');
+    const segments = filePath.split(/[\\/]/);
+    if (segments.some((segment) => segment === '..') || segments[0].toLowerCase() === '.git') throw new GitWorkbenchError('invalid-path');
+    const absolute = path.resolve(this.repositoryPath, filePath);
+    const root = await realpath(this.repositoryPath);
+    const real = await realpath(absolute).catch(async (error) => {
+      if (!allowMissing || error.code !== 'ENOENT') throw new GitWorkbenchError('invalid-path');
+      return path.join(await realpath(path.dirname(absolute)).catch(() => { throw new GitWorkbenchError('invalid-path'); }), path.basename(absolute));
+    });
+    if (!real.startsWith(root + path.sep)) throw new GitWorkbenchError('invalid-path');
+    return absolute;
+  }
+
+  // Dossier .git du dépôt (ou de la worktree), là où Git note une opération en cours. Il ne change pas : lu une fois.
+  #gitDirectoryPath = null;
+  async #gitDirectory() {
+    this.#gitDirectoryPath ??= path.resolve((await runGit(this.repositoryPath, ['rev-parse', '--absolute-git-dir'])).trim());
+    return this.#gitDirectoryPath;
+  }
+
+  async #operationEditors(operation) {
+    return operation === 'rebase' ? this.#rebaseEditors() : { GIT_EDITOR: 'true' };
+  }
+
+  async #pendingOperation() {
+    await this.#ensureRepositoryPath();
+    const operation = await this.operation();
+    if (!operation) throw new GitWorkbenchError('no-operation');
+    return operation;
   }
 
   // Seuls les fichiers que `git status` liste peuvent être indexés, désindexés ou comparés.

@@ -25,6 +25,16 @@ const MESSAGES = {
   'git-launch-failed': 'Impossible de lancer Git.',
   'git-output-too-large': 'La sortie de Git est trop volumineuse pour être affichée.',
   'git-operation-failed': 'Git a refusé l’opération.',
+  'fetch-failed': 'Récupération impossible depuis le dépôt distant (réseau, authentification ou dépôt introuvable).',
+  'branch-exists': 'Une branche locale porte déjà ce nom : basculez dessus plutôt que de la recréer.',
+  'file-not-in-conflict': 'Ce fichier n’est plus en conflit. Actualisez la vue.',
+  'conflicts-remaining': 'Des fichiers sont encore en conflit : résolvez-les tous avant de continuer.',
+  'no-operation': 'Aucune opération Git n’est en cours.',
+  'operation-cannot-skip': 'Un merge ne peut pas passer un commit : terminez-le ou annulez-le.',
+  'operation-in-progress': 'Une opération Git (rebase, cherry-pick, merge) est en cours : terminez-la ou annulez-la d’abord.',
+  'invalid-content': 'Contenu de fichier invalide.',
+  'file-not-editable': 'Ce fichier est binaire ou trop volumineux pour l’éditeur.',
+  'remote-no-web': 'Ce dépôt distant n’a pas de page web connue (URL locale ou non reconnue).',
 };
 
 export function describeError(error) {

@@ -113,11 +113,25 @@ export function renderCommitDetails(panel, details, { selectedFile, onClose, onO
 const workingStatus = (file, staged) => (file.untracked ? '?' : (staged ? file.indexStatus : file.worktreeStatus).replace(' ', 'M'));
 
 // Zone de staging façon GitKraken : non indexés puis indexés, chacun avec son action groupée.
-export function renderWorkingChanges(panel, files, { branch, selectedFile, onOpenFile, onToggleStage, onStageAll, onUnstageAll, onFileMenu }) {
+export function renderWorkingChanges(panel, files, { branch, selectedFile, onOpenFile, onResolve, onToggleStage, onStageAll, onUnstageAll, onFileMenu }) {
   const title = element('div', 'wip-title');
   title.append(element('strong', '', files.length ? `${plural(files.length, 'fichier')} modifié${files.length > 1 ? 's' : ''}` : 'Aucun changement'), ' sur ', element('span', 'branch-chip', branch));
   const nodes = [title];
   if (!files.length) nodes.push(element('p', 'muted wip-clean', 'L’arbre de travail est propre : rien à indexer ni à committer.'));
+  // Fichiers en conflit d'abord : ils bloquent l'opération en cours tant qu'ils ne sont pas résolus.
+  const conflicts = files.filter((file) => file.conflicted);
+  if (conflicts.length) {
+    const head = element('div', 'stage-group-header conflict-header');
+    head.append(element('span', '', `En conflit (${conflicts.length})`));
+    const list = element('div', 'details-files stage-list conflict-list');
+    for (const file of conflicts) {
+      const resolve = element('button', 'button compact resolve-button', 'Résoudre');
+      resolve.title = 'Ouvrir l’outil de fusion';
+      resolve.addEventListener('click', (event) => { event.stopPropagation(); onResolve(file); });
+      list.append(fileRow({ ...file, status: 'U' }, { selected: file.path === selectedFile, onOpen: () => onResolve(file), onMenu: (x, y) => onFileMenu(file, false, x, y), action: resolve }));
+    }
+    nodes.push(head, list);
+  }
   const groups = [
     ['Non indexés', files.filter((file) => file.unstaged), false, 'Tout indexer', onStageAll],
     ['Indexés', files.filter((file) => file.staged), true, 'Tout désindexer', onUnstageAll],

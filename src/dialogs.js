@@ -1,6 +1,6 @@
 // Dialogues et menu contextuel dans la page : Electron n'implémente pas window.prompt.
 
-function element(tag, className, text) {
+export function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -9,7 +9,7 @@ function element(tag, className, text) {
 
 // Ouvre une <dialog> modale construite à la volée ; `collect` lit la valeur au moment de la validation.
 // `cancelLabel: null` retire le bouton Annuler (simple information à acquitter).
-function modal(title, body, { confirmLabel = 'Confirmer', cancelLabel = 'Annuler', collect, validate = () => null }) {
+export function modal(title, body, { confirmLabel = 'Confirmer', cancelLabel = 'Annuler', collect, validate = () => null }) {
   return new Promise((resolve) => {
     const dialog = element('dialog', 'app-dialog');
     const form = element('form');
@@ -50,51 +50,15 @@ export function askText({ title, label, value = '', confirmLabel, hint }) {
   return modal(title, body, { confirmLabel, collect: () => input.value.trim(), validate: (text) => (text ? null : 'Une valeur est requise.') });
 }
 
-// Plan de rebase interactif, du plus ancien au plus récent : action par commit et réordonnancement.
-export function editRebasePlan({ base, branch, commits }) {
-  const plan = commits.map((commit) => ({ ...commit, action: 'pick' }));
-  const list = element('ol', 'rebase-plan');
-  const render = () => {
-    list.replaceChildren(...plan.map((item, index) => {
-      const row = element('li', `rebase-step action-${item.action}`);
-      const select = element('select', 'rebase-action');
-      for (const [value, text] of [['pick', 'Garder'], ['fixup', 'Fusionner dans le précédent'], ['drop', 'Écarter']]) {
-        const option = element('option', '', text); option.value = value; option.selected = item.action === value; select.append(option);
-      }
-      select.addEventListener('change', () => { item.action = select.value; render(); });
-      const move = (offset) => { const target = index + offset; if (target < 0 || target >= plan.length) return; [plan[index], plan[target]] = [plan[target], plan[index]]; render(); };
-      const up = element('button', 'icon-button small', '↑'); up.type = 'button'; up.disabled = index === 0; up.title = 'Monter'; up.addEventListener('click', () => move(-1));
-      const down = element('button', 'icon-button small', '↓'); down.type = 'button'; down.disabled = index === plan.length - 1; down.title = 'Descendre'; down.addEventListener('click', () => move(1));
-      const label = element('span', 'rebase-subject');
-      label.append(element('code', '', item.shortHash), ' ', item.subject);
-      row.append(select, label, up, down);
-      return row;
-    }));
-  };
-  render();
-  const intro = element('p', 'dialog-hint', `Commits de « ${branch} » rejoués sur ${base}, du plus ancien (en haut) au plus récent.`);
-  return modal('Rebase interactif', [intro, list], {
-    confirmLabel: 'Vérifier le plan',
-    collect: () => plan.map(({ hash, action }) => ({ hash, action })),
-    validate: (steps) => {
-      let previousKept = false;
-      for (const step of steps) {
-        if (step.action === 'fixup' && !previousKept) return 'Un commit fusionné doit suivre un commit gardé.';
-        previousKept = step.action !== 'drop';
-      }
-      return steps.every((step) => step.action === 'drop') ? 'Le plan écarterait tous les commits.' : null;
-    },
-  });
-}
-
 // Menu contextuel unique : `items` est une liste de [libellé, action] ou de null pour un séparateur.
 const menu = () => document.querySelector('#context-menu');
 export function showMenu(items, x, y) {
   const container = menu();
   container.replaceChildren(...items.filter((item) => item !== undefined && item !== false).map((item) => {
     if (item === null) return element('div', 'menu-separator');
-    const [text, action, disabled] = item;
+    const [text, action, disabled, shortcut] = item;
     const button = element('button', 'menu-item', text);
+    if (shortcut) button.append(element('span', 'menu-shortcut', shortcut));
     button.setAttribute('role', 'menuitem');
     button.disabled = Boolean(disabled);
     button.addEventListener('click', () => { hideMenu(); action(); });

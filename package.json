@@ -2,6 +2,7 @@
   "name": "git-workbench",
   "description": "Desktop client Git local, privé et sans télémétrie.",
   "author": "MonniHermes",
+  "homepage": "https://github.com/MonniHermes/git-workbench",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
@@ -12,7 +13,11 @@
     "lint": "node scripts/lint.mjs",
     "typecheck": "node scripts/typecheck.mjs",
     "test": "node --test",
-    "build": "vite build && electron-builder --dir"
+    "build": "vite build && electron-builder --dir",
+    "package:linux": "vite build && electron-builder --linux deb --x64",
+    "package:win": "vite build && electron-builder --win nsis --x64",
+    "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
+    "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
   },
   "build": {
     "appId": "com.monnishermes.gitworkbench",
@@ -29,9 +34,32 @@
     ],
     "linux": {
       "target": [
-        "dir"
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
-      "category": "Development"
+      "category": "Development",
+      "maintainer": "MonniHermes",
+      "synopsis": "Client Git desktop local, privé et sans télémétrie"
+    },
+    "deb": {
+      "depends": [
+        "git",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2"
+      ]
     },
     "mac": {
       "target": [
@@ -40,8 +68,21 @@
     },
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": true
     }
   },
   "devDependencies": {

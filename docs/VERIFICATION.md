@@ -24,13 +24,37 @@
 
 Qualité/build exercés dans l’environnement courant :
 
-- `npm test` : 18/18 tests passés (commande exécutée le 2026-10-31).
+- `npm test` : 18/18 tests passés (commande exécutée le 2026-10-31) ; au 2026-10-31 après MON-643 : 25/25 (19 tests d’intégration Git + 3 tests de packaging + 3 tests de l’éditeur de séquence).
 - `npm run lint` et `npm run typecheck` via l’entrée npm directe : les deux scripts déclarés passent ; lint vérifie 8 fichiers JavaScript et typecheck les invariants du projet (`private: true`, `license: UNLICENSED`).
 - `npm run build` : Vite 7.3.7 et electron-builder 26.18.0 ont produit `artifacts/linux-unpacked` pour Linux x64 avec Electron 39.8.10.
 - Smoke de la fenêtre empaquetée : `xvfb-run -a env GIT_WORKBENCH_SMOKE=1 ELECTRON_DISABLE_GPU=1 artifacts/linux-unpacked/git-workbench --no-sandbox --disable-gpu` — code 0.
 - Limite de cet essai : pas de parcours manuel interactif de chaque contrôle UI ni de test de plateforme hors Debian 13 x86_64. Windows 10+ x64, macOS 12+ Intel/Apple Silicon, Ubuntu 22.04 x86_64 et Debian 12 x86_64 ne sont pas testés et ne sont pas déclarés supportés.
 
 Le wrapper terminal a d’abord mal parsé la sortie de lint (`ESLint output (JSON parse failed: EOF while parsing a value at line 1 column 0)`, code 1) ; le contrôle a été repris par l’entrée npm directe, avec succès. Il s’agit de vérifications locales, pas d’une exécution GitHub Actions. La build candidate actuelle est un répertoire Linux x64 unpacked (284 MiB) dans `artifacts/linux-unpacked`; le smoke test empaqueté sous `xvfb-run` retourne `Desktop window and isolated preload loaded.` (code 0). Aucun artefact Windows/macOS n’a été produit sur cet hôte Linux.
+
+## Installateur Linux x64 (`.deb`) — MON-643
+
+Format retenu : paquet Debian x64 (voir `docs/adr/0002-linux-installer.md`). Vérifié le 2026-10-31 :
+
+- Build : `npm run package:linux -- -c.extraMetadata.version=1.0.0-rc.1+bf78eee` depuis le commit `bf78eee` (= `v1.0.0-rc.1` + packaging, smoke installateur et correctif du rebase interactif empaqueté) ; electron-builder 26.18.0, fpm 1.17.0 (outil téléchargé par electron-builder), Electron 39.8.10. Sortie : `git-workbench_1.0.0-rc.1+bf78eee_amd64.deb`, 90 864 296 octets, version Debian `1.0.0~rc.1+bf78eee`, arch `amd64`, dépendance `git` déclarée.
+- SHA-256 : `ee4eba9d55f173b10e08db9d4af3388970318f360bea29b3b20491a760395d0c`.
+- Smoke : `sh scripts/smoke-linux-installer.sh <deb>` — conteneur jetable `debian:trixie` (`sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1`), Docker 26.1.5, x86_64. Le script vérifie la somme, installe via `apt-get install ./…deb` (résolution des dépendances), contrôle `dpkg -s`, le lanceur `/usr/bin/git-workbench` et l’entrée `git-workbench.desktop`, lance l’application installée sous `xvfb-run` en utilisateur non root avec le sandbox Chromium actif (`chrome-sandbox` 755, espaces de noms utilisateur ; jamais `--no-sandbox`), lit un dépôt Git jetable via le pont preload → IPC → Git CLI, exécute dans l’app installée un rebase interactif (pick/drop) sur ce dépôt jetable, puis `apt-get purge` et contrôle l’absence de `/opt/Git Workbench`, du lanceur et de l’entrée de bureau. Résultat : code 0, `Desktop window and isolated preload loaded.`, `Repository read through preload IPC: {"branch":"main","files":0,"commits":3,"subject":"installer smoke"}`, `Packaged interactive rebase applied: installer smoke < base`, `Purged cleanly`.
+- Défaut trouvé et corrigé par ce smoke : dans une build empaquetée, `process.execPath` est le binaire de l’app ; l’éditeur de séquence du rebase interactif ouvrait donc une seconde instance au lieu d’appliquer le plan (`git-operation-failed`, historique inchangé). Les tests `node --test` ne le voyaient pas (exécutés sous Node). Correctif `bf78eee` : préfixe `ELECTRON_RUN_AS_NODE=1` limité à la commande éditeur (jamais hérité par les hooks). La candidate `0c44b6de…` construite avant ce correctif est remplacée.
+- Isolation : aucun paquet installé sur l’hôte (`dpkg -s git-workbench` absent, pas de `/opt/Git Workbench`). Le conteneur lève les profils seccomp/AppArmor par défaut de Docker, qui interdisent les espaces de noms utilisateur autorisés par un Debian 13 standard.
+- Limites : seul Debian 13 x86_64 (conteneur, affichage virtuel) est vérifié ; pas de parcours UI manuel (boîtes de confirmation natives non exercées par le smoke). Le repli SUID de `chrome-sandbox` (systèmes sans espaces de noms utilisateur) échoue dans un conteneur Docker sans privilèges et n’est pas vérifié. Paquet non signé, publié sur aucun dépôt APT ; aucune autre distribution, architecture ni OS n’est annoncé.
+
+## Installateur Windows x64 (NSIS) — MON-647
+
+Format retenu : installateur NSIS par utilisateur, x64 (voir `docs/adr/0003-windows-installer.md`). Vérifié le 2026-10-31 :
+
+- Build : `sh scripts/package-windows-release.sh` depuis le commit `45f924f`, dans le conteneur public `electronuserland/builder:wine` (Ubuntu 22.04, Wine 11.0, Docker 26.1.5) — nécessaire car electron-builder ne peut invoquer NSIS sans wine sur cet hôte (`spawn wine ENOENT`). electron-builder 26.18.0, Electron 39.8.10. Sortie : `Git Workbench Setup 1.0.0-rc.1+45f924f.exe`, 102 016 516 octets (97.3 Mio), arch x64, `perMachine: false` (installation sans droits admin).
+- SHA-256 : `70a18810e7a7d755ba9996585fdd84c497a3c51a74bd5bce114fda9a40d9f113`.
+- Contrôles statiques (`sh scripts/smoke-win-installer.sh`) : somme SHA-256 recalculée et concordante, en-tête PE (`MZ`) valide, taille plausible (>10 Mo).
+- Assistant d'installation observé visuellement (captures d'écran prises via Xvfb + xdotool dans le même conteneur) : titre et version corrects (« Git Workbench 1.0.0-rc.1+45f924f »), écran « Choose Installation Options » avec **« Only for me (root) »** pré-sélectionné et chemin par défaut sous `AppData\Local\Programs\Git Workbench` — confirme une installation par utilisateur, sans admin, conforme à la décision.
+- **Non vérifié ici : installation/lancement/désinstallation automatisés.** Une tentative d'installation silencieuse (`wine setup.exe /S`) échoue systématiquement (code 2). Cause identifiée par capture d'écran en mode non silencieux : le contrôle mono-instance NSIS d'electron-builder (nommé-pipe/RPC) détecte à tort une instance déjà lancée (« Git Workbench is running » puis boucle « Retry » qui ne se résout jamais), à cause du support RPC/DCOM incomplet de Wine (`err:ole:StdMarshalImpl_MarshalInterface`, `Failed to open RpcSs service`). C'est une incompatibilité connue entre les installateurs NSIS d'electron-builder et Wine, indépendante de l'application. Aucune plateforme Windows n'est donc déclarée vérifiée de bout en bout par ce run.
+- Décision d'Antoine (carte MON-647, 2026-10-31) : il effectue lui-même la vérification réelle (installation, lancement, rebase interactif, désinstallation) sur son poste Windows 11 x64, faute de ressources internes pour une QA manuelle complète ; l'artefact lui est remis via une pré-release GitHub officielle (dépôt privé, tag `-rc.N`). Procédure détaillée : `docs/WINDOWS-INSTALL-CHECK.md`. Tant que ce retour n'est pas rapporté sur l'issue, aucune installation Windows réelle n'est revendiquée comme vérifiée.
+- Signature : non signée pour cette tranche (décision « sign_later »). Coût de signature (OV/EV, non engagé) documenté dans `docs/adr/0003-windows-installer.md`.
+- Limites : seul le build dans ce conteneur Ubuntu 22.04 + Wine 11.0 est vérifié ; aucune autre méthode de build Windows n'est annoncée. macOS et ARM64 restent hors périmètre (Antoine a confirmé un poste Intel/AMD x64).
 
 ## Sécurité et confidentialité — limites explicites
 

@@ -32,7 +32,32 @@ function createWindow() {
     if (process.env.GIT_WORKBENCH_SMOKE === '1') {
       const ready = await mainWindow.webContents.executeJavaScript("document.title === 'Git Workbench' && Boolean(window.workbench)");
       console.log(ready ? 'Desktop window and isolated preload loaded.' : 'Desktop smoke check failed.');
-      app.exit(ready ? 0 : 1);
+      if (!ready || !process.env.GIT_WORKBENCH_SMOKE_REPO) return app.exit(ready ? 0 : 1);
+      try {
+        const candidate = new GitService(process.env.GIT_WORKBENCH_SMOKE_REPO);
+        await candidate.verifyRepository();
+        repository = candidate;
+        const summary = await mainWindow.webContents.executeJavaScript(
+          'window.workbench.refresh().then((r) => ({ branch: r.status.branch, files: r.status.files.length, commits: r.history.length, subject: r.history[0]?.subject }))',
+        );
+        console.log(`Repository read through preload IPC: ${JSON.stringify(summary)}`);
+        if (summary.commits === 0) return app.exit(1);
+        if (process.env.GIT_WORKBENCH_SMOKE_REWRITE === '1') {
+          // Disposable repositories only: exercises the packaged GIT_SEQUENCE_EDITOR path (pick newest, drop the other).
+          const base = (await candidate.history())[2].hash;
+          const { commits } = await candidate.interactiveRebaseCommits(base);
+          const [older, newer] = commits;
+          await candidate.interactiveRebase(base, [{ hash: newer.hash, action: 'pick' }, { hash: older.hash, action: 'drop' }]);
+          const after = await candidate.history();
+          const applied = after.length === summary.commits - 1 && after[0].subject === newer.subject;
+          console.log(applied ? `Packaged interactive rebase applied: ${after.map((commit) => commit.subject).join(' < ')}` : 'Packaged interactive rebase not applied.');
+          return app.exit(applied ? 0 : 1);
+        }
+        app.exit(0);
+      } catch (error) {
+        console.log(`Repository smoke check failed: ${error?.code || error?.message || 'unknown'}`);
+        app.exit(1);
+      }
     }
   });
   if (app.isPackaged) mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));

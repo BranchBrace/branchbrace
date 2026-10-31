@@ -4,8 +4,16 @@
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
-    ["@semantic-release/exec", {"publishCmd": "./scripts/release-images.sh ${nextRelease.version}"}],
-    "@semantic-release/github",
+    ["@semantic-release/exec", {
+      "prepareCmd": "./scripts/package-windows-release.sh ${nextRelease.version}",
+      "publishCmd": "./scripts/release-images.sh ${nextRelease.version}"
+    }],
+    ["@semantic-release/github", {
+      "assets": [
+        {"path": "artifacts/*.exe", "label": "Git Workbench Setup (Windows x64)"},
+        {"path": "artifacts/*.exe.sha256", "label": "SHA-256 (Windows x64 installer)"}
+      ]
+    }],
     ["@semantic-release/git", {"assets": ["CHANGELOG.md"], "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"}]
   ]
 }

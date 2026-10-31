@@ -61,6 +61,13 @@ export function resolveBlock(block, choice) {
   }
 }
 
+// Étendue d'un texte inséré à partir du début d'une ligne : fin exclusive, comme une plage Monaco. Un texte qui finit
+// par une fin de ligne s'arrête en colonne 1 de la ligne suivante ; un texte vide donne une plage vide.
+export function textSpan(startLine, text) {
+  const lines = text.split('\n');
+  return { startLine, endLine: startLine + lines.length - 1, endColumn: lines.at(-1).length + 1 };
+}
+
 // Applique un même choix à tous les conflits restants.
 export function resolveAll(text, choice) {
   return parseConflicts(text).map((block) => (block.type === 'text' ? block.lines.join('') : resolveBlock(block, choice))).join('');

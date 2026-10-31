@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitService, remoteWebUrl } from '../src/git.js';
-import { conflictCount, parseConflicts, resolveAll, resolveBlock } from '../src/conflicts.js';
+import { conflictCount, parseConflicts, resolveAll, resolveBlock, textSpan } from '../src/conflicts.js';
 import { formatHeader, knownScopes, parseHeader, withBreakingFooter } from '../src/conventional.js';
 
 function git(cwd, ...args) {
@@ -223,6 +223,12 @@ test('conflict markers parse with diff3 bases and resolve block by block', () =>
   assert.equal(resolveBlock(conflicts[1], 'both'), 'x\ny\n');
   assert.equal(resolveAll(text, 'theirs'), 'a\r\ntheirs\r\nz\ny\n');
   assert.equal(resolveAll('no conflict\n<<<<<<< dangling\n', 'ours'), 'no conflict\n<<<<<<< dangling\n');
+});
+
+test('a resolution span covers the inserted lines so the review can track it', () => {
+  assert.deepEqual(textSpan(4, 'a\nb\n'), { startLine: 4, endLine: 6, endColumn: 1 });
+  assert.deepEqual(textSpan(4, 'a\r\nlast'), { startLine: 4, endLine: 5, endColumn: 5 });
+  assert.deepEqual(textSpan(4, ''), { startLine: 4, endLine: 4, endColumn: 1 });
 });
 
 test('conventional commit headers round-trip and suggest known scopes', () => {

@@ -50,6 +50,9 @@ Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation a
 - B5. Amend of the last commit (message and/or staged content) with a recovery ref; confirmation only when the commit is already on its upstream.
 - B6. Interactive rebase supports pick, reword, squash, fixup and drop, with the final messages chosen before the rebase starts and reapplied after a conflict.
 - B7. Conventional Commits helper for the commit summary; quick access to the repository folder and a terminal opened in it.
+- B8. Commit review: every file changed by a commit, stacked with its own diff (collapsed to the changed regions), reached from the commit panel; files can be listed flat or grouped by folder.
+- B9. Interactive rebase plan editor: full-window, one colour and icon per action, rows reordered by dragging. Starting it from the validated plan needs no second confirmation; the recovery ref remains.
+- B10. Application menu in an icon left of the tabs (no native menu bar); informational messages are short toasts, confirmations stay for push, branch rewrite, abort, skip and amend of a pushed commit.
 
 ## Architecture and delivery decisions
 

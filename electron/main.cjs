@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -142,6 +142,20 @@ ipcMain.on('confirm:response', (event, { id, accepted }) => {
 });
 
 app.whenReady().then(() => {
+  // Pas de barre de menu native (Windows, Linux) : le menu de l'application vit dans l'icône à gauche des onglets.
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+  handle('window:action', (_event, { action } = {}) => {
+    const contents = mainWindow?.webContents;
+    if (!contents) return null;
+    if (action === 'zoom-in') contents.setZoomLevel(Math.min(contents.getZoomLevel() + 0.5, 4));
+    else if (action === 'zoom-out') contents.setZoomLevel(Math.max(contents.getZoomLevel() - 0.5, -3));
+    else if (action === 'zoom-reset') contents.setZoomLevel(0);
+    else if (action === 'fullscreen') mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    else if (action === 'reload') contents.reload();
+    else if (action === 'devtools' && !app.isPackaged) contents.toggleDevTools();
+    else if (action === 'quit') app.quit();
+    return null;
+  });
   handle('repository:choose', async () => {
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
     if (result.canceled || result.filePaths.length !== 1) return null;
@@ -263,17 +277,8 @@ Un point de récupération local sera conservé.`)) return null;
   });
   handle('repository:rebase-interactive:run', async (_event, { root, upstream, plan }) => {
     await service(root).assertClean();
-    const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);
-    const byHash = new Map(commits.map((commit) => [commit.hash, commit]));
-    const planLines = Array.isArray(plan)
-      ? plan.map((item, index) => {
-          const commit = byHash.get(item?.hash);
-          const shortHash = commit?.shortHash || (typeof item?.hash === 'string' ? item.hash.slice(0, 12) : '?');
-          const subject = commit?.subject || '(commit inconnu)';
-          return `${index + 1}. ${item?.action || '?'} ${shortHash} ${subject}`;
-        }).join('\n')
-      : '(plan invalide)';
-    if (!await confirm('Confirmer le rebase interactif ?', `Base résolue : ${resolvedBase.slice(0, 12)}.\n\nPlan exact qui sera appliqué, dans l’ordre :\n${planLines}\n\nUne référence de récupération sera créée. En cas de conflit, l’opération reste à terminer ou annuler avec Git.`)) return null;
+    // Pas de seconde confirmation : le plan, action par action, vient d'être validé dans l'éditeur de rebase, et
+    // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
   });
   createWindow();

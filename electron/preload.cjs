@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
       .catch(() => ipcRenderer.send('confirm:response', { id: request.id, accepted: false }));
   }),
   chooseRepository: () => call('repository:choose'),
+  windowAction: (action) => call('window:action', { action }),
   restoreSession: () => call('session:restore'),
   activate: (root) => call('session:activate', { root }),
   closeRepository: (root, next) => call('session:close', { root, next }),

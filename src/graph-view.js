@@ -1,4 +1,5 @@
 import { layoutGraph } from './graph-layout.js';
+import { refIcon, refLegend } from './ref-icons.js';
 
 // Rendu du graphe central façon GitKraken : colonnes branche/tag · graphe · message. L'auteur figure dans le
 // nœud (initiales), la date et le SHA dans l'infobulle de la ligne et dans le panneau de détail.
@@ -73,15 +74,32 @@ function trackingText(label, refs) {
   return `\n${local.ahead ? `${local.ahead} commit(s) à pousser` : ''}${local.ahead && local.behind ? ', ' : ''}${local.behind ? `${local.behind} à récupérer` : ''} (${local.upstream}).`;
 }
 
+// Avance / retard d'une branche locale sur sa distante, affiché dans l'étiquette même.
+function syncText(label, refs) {
+  const local = refs?.local?.find((ref) => ref.name === label.branch);
+  if (!local?.upstream || local.gone) return '';
+  return `${local.ahead ? `↑${local.ahead}` : ''}${local.ahead && local.behind ? ' ' : ''}${local.behind ? `↓${local.behind}` : ''}`;
+}
+
+// Étiquette : pastille ordinateur pour une branche locale, nuage pour sa copie distante quand elle pointe sur le même
+// commit ; une branche seulement distante est en pointillés, nuage en tête.
 function labelChip(label, color, handlers, refs) {
   const chip = document.createElement('span');
-  chip.className = `ref-chip${label.head ? ' head' : ''}${label.tag ? ' tag' : ''}${!label.local && label.remote ? ' remote' : ''}`;
+  const remoteOnly = !label.local && label.remote;
+  chip.className = `ref-chip${label.head ? ' head' : ''}${label.tag ? ' tag' : ''}${remoteOnly ? ' remote' : ''}`;
   chip.style.setProperty('--lane', color);
+  if (remoteOnly) chip.append(refIcon('remote', 'Branche distante : sur le serveur, pas en local à ce commit'));
   const name = document.createElement('span'); name.className = 'ref-chip-name';
-  name.textContent = `${label.head ? '✓ ' : ''}${label.tag ? '◆ ' : ''}${!label.local && label.remote ? '☁ ' : ''}${label.text}`;
-  const icons = document.createElement('span'); icons.className = 'ref-chip-icons';
-  icons.textContent = label.local ? `⌂${label.remote ? '☁' : ''}` : '';
-  chip.append(name, icons);
+  name.textContent = `${label.head ? '✓ ' : ''}${label.tag ? '◆ ' : ''}${label.text}`;
+  chip.append(name);
+  if (label.local) {
+    const sync = syncText(label, refs);
+    if (sync) { const node = document.createElement('span'); node.className = 'ref-chip-sync'; node.textContent = sync; chip.append(node); }
+    const icons = document.createElement('span'); icons.className = 'ref-chip-icons';
+    icons.append(refIcon('local', 'Branche locale'));
+    if (label.remote) icons.append(refIcon('remote', 'Sa copie distante pointe sur ce même commit'));
+    chip.append(icons);
+  }
   chip.title = label.tag ? `Tag ${label.text}` : label.local ? `Branche locale ${label.text}${label.remote ? ' — sa distante pointe sur le même commit' : ''}${trackingText(label, refs)}${label.head ? '' : '\nDouble-clic pour basculer'}` : `Branche distante ${label.text} (sur le serveur, pas en local à ce commit)`;
   if (label.branch) chip.addEventListener('dblclick', (event) => { event.stopPropagation(); if (!label.head) handlers.onCheckout(label.branch); });
   const ref = label.branch ? ['local', label.branch] : label.remoteName ? ['remote', label.remoteName] : label.tagName ? ['tags', label.tagName] : null;
@@ -106,6 +124,8 @@ export function renderGraph(container, { commits, head, wip, selected, refs }, h
   const graphWidth = PAD * 2 + Math.max(layout.width, 1) * LANE;
   // Posée sur le panneau pour que l'en-tête des colonnes partage la largeur du graphe.
   (container.parentElement ?? container).style.setProperty('--graph-width', `${Math.min(graphWidth, 420)}px`);
+  const heading = container.parentElement?.querySelector('.graph-head .cell.refs');
+  if (heading && !heading.querySelector('.ref-legend')) heading.append(refLegend());
   container.replaceChildren();
 
   rows.forEach((commit, index) => {
@@ -124,7 +144,7 @@ export function renderGraph(container, { commits, head, wip, selected, refs }, h
       refsCell.append(labelChip(labels[0], color, handlers, refs));
       if (labels.length > 1) {
         const more = document.createElement('span'); more.className = 'ref-more'; more.textContent = `+${labels.length - 1}`;
-        more.title = labels.slice(1).map((label) => `${label.tag ? '◆' : label.local ? '⌂' : '☁'} ${label.text}`).join('\n');
+        more.title = labels.slice(1).map((label) => `${label.text} (${label.tag ? 'tag' : label.local ? (label.remote ? 'locale et distante' : 'locale') : 'distante'})`).join('\n');
         refsCell.append(more);
       }
     }

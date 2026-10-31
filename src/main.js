@@ -14,8 +14,8 @@ const repositoryName = (root) => root.split(/[\\/]/).filter(Boolean).pop() || ro
 // Monaco (plusieurs Mo) n'est chargé qu'à la première vue qui en a besoin : le graphe s'affiche sans l'attendre.
 let monacoViews = null;
 let viewsLoading = null;
-const views = () => (viewsLoading ??= Promise.all([import('./diff-panel.js'), import('./editor-view.js'), import('./conflict-view.js')])
-  .then(([diff, editor, conflict]) => (monacoViews = { ...diff, ...editor, ...conflict })));
+const views = () => (viewsLoading ??= Promise.all([import('./diff-panel.js'), import('./editor-view.js'), import('./conflict-view.js'), import('./commit-review.js')])
+  .then(([diff, editor, conflict, review]) => (monacoViews = { ...diff, ...editor, ...conflict, ...review })));
 const OPERATION_NAMES = { rebase: 'Rebase', 'cherry-pick': 'Cherry-pick', merge: 'Merge', revert: 'Revert' };
 
 const ui = {
@@ -38,7 +38,7 @@ const ui = {
   editor: null,
   async invoke(action) {
     try { return await action(); }
-    catch (error) { this.message(describeError(error)); return null; }
+    catch (error) { this.message(describeError(error), true); return null; }
   },
   // Commande lancée explicitement (menu, bouton) : un refus s'affiche dans une fenêtre, pas seulement dans la ligne de statut.
   async act(action) {
@@ -50,10 +50,18 @@ const ui = {
       return null;
     }
   },
-  message(text) { $('#status-message').textContent = text; },
+  // Toast bref et non bloquant : le résultat d'une action se lit dans le graphe, le toast ne fait que le confirmer.
+  message(text, error = false) {
+    const toast = $('#status-message');
+    toast.textContent = text;
+    toast.classList.toggle('error', error);
+    toast.classList.add('visible');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => toast.classList.remove('visible'), error ? 6000 : 3000);
+  },
   // Affiche un dépôt (instantané renvoyé par le processus principal) dans son onglet, en gardant le brouillon de
   // commit de l'onglet quitté.
-  open(data, message = 'Dépôt ouvert en lecture locale. Aucun contenu n’a été transmis.') {
+  open(data, message = null) {
     if (!data) return;
     if (this.root) this.drafts.set(this.root, { summary: $('#commit-summary').value, description: $('#commit-description').value });
     const draft = this.drafts.get(data.root) || { summary: '', description: '' };
@@ -154,16 +162,18 @@ const ui = {
   setView(view, title = '') {
     if (this.view === 'diff' && view !== 'diff') monacoViews?.disposeDiff();
     if (this.view === 'conflict' && view !== 'conflict') monacoViews?.disposeConflict();
+    if (this.view === 'review' && view !== 'review') monacoViews?.disposeReview();
     this.view = view ?? 'graph';
     $('#graph-panel').hidden = view !== 'graph';
     $('#diff-view').hidden = view !== 'diff';
+    $('#review-view').hidden = view !== 'review';
     $('#editor-view').hidden = view !== 'editor';
     $('#conflict-view').hidden = view !== 'conflict';
-    $('#workspace-header').hidden = view !== 'diff' && view !== 'conflict';
+    $('#workspace-header').hidden = view !== 'diff' && view !== 'conflict' && view !== 'review';
     $('#view-title').textContent = title;
     $('#view-graph').classList.toggle('active', view !== 'editor');
     $('#view-editor').classList.toggle('active', view === 'editor');
-    if (view !== 'diff' && view !== 'conflict') $('#view-tools').replaceChildren();
+    if (view !== 'diff' && view !== 'conflict' && view !== 'review') $('#view-tools').replaceChildren();
   },
   async leaveDiff() {
     if (this.view === 'diff' && monacoViews?.diffIsDirty() && !await confirmDialog({ title: 'Quitter sans enregistrer ?', message: 'Le fichier modifié dans le diff n’a pas été enregistré (Ctrl+S). Ces modifications seront perdues.' })) return false;
@@ -288,6 +298,11 @@ const ui = {
     }
     this.renderPanel();
     this.renderRefs();
+    // La revue ouverte suit le commit sélectionné ; sans commit (WIP), retour au graphe.
+    if (this.view === 'review' && monacoViews?.reviewedCommit() !== this.details?.hash) {
+      if (this.details) await this.showCommitReview(this.details.hash);
+      else this.setView('graph');
+    }
   },
   // Droite : détail du commit sélectionné, sinon zone de staging + composition du commit (comme GitKraken).
   renderPanel() {
@@ -299,9 +314,11 @@ const ui = {
       renderCommitDetails(panel, this.details, {
         selectedFile: this.detailFile,
         onClose: () => this.selectCommit(WIP),
-        onOpenFile: (file) => this.showCommitDiff(this.details.hash, file.path),
+        onReview: () => this.showCommitReview(this.details.hash),
+        onOpenFile: (file) => this.showCommitReview(this.details.hash, file.path),
         onFileMenu: (file, x, y) => showMenu([
-          ['Voir le diff', () => this.showCommitDiff(this.details.hash, file.path)],
+          ['Voir dans la revue du commit', () => this.showCommitReview(this.details.hash, file.path)],
+          ['Voir ce fichier seul', () => this.showCommitDiff(this.details.hash, file.path)],
           ['Ouvrir la version de travail dans l’éditeur', () => this.showEditor(file.path), file.status === 'D'],
           ['Afficher dans le dossier', () => this.invoke(() => window.workbench.showFile(ui.root, file.path)), file.status === 'D'],
           null,
@@ -432,7 +449,32 @@ const ui = {
     if (data === null) return;
     this.detailFile = filePath;
     this.renderPanel();
-    this.renderDiff(filePath, data, `${filePath} · ${hash.slice(0, 7)}`, []);
+    const back = document.createElement('button');
+    back.className = 'chip-toggle';
+    back.textContent = 'Tous les fichiers';
+    back.title = 'Revenir à la revue de tout le commit';
+    back.addEventListener('click', () => this.showCommitReview(hash, filePath));
+    this.renderDiff(filePath, data, `${filePath} · ${hash.slice(0, 7)}`, this.details?.hash === hash ? [back] : []);
+  },
+  // Revue du commit : tous ses fichiers modifiés l'un sous l'autre ; sur un fichier, la revue défile jusqu'à lui.
+  async showCommitReview(hash, filePath = null) {
+    if (this.details?.hash !== hash) return;
+    if (!await this.leaveDiff()) return;
+    this.detailFile = filePath;
+    this.renderPanel();
+    if (this.view === 'review' && monacoViews?.reviewedCommit() === hash) {
+      if (filePath) monacoViews.revealReviewFile(filePath);
+      return;
+    }
+    const { showReview } = await views();
+    const details = this.details;
+    this.setView('review', `${hash.slice(0, 7)} · ${details.message.split('\n')[0]}`);
+    showReview($('#review-view'), $('#view-tools'), {
+      details,
+      focusPath: filePath,
+      load: (path) => this.invoke(() => window.workbench.commitVersions(ui.root, hash, path)),
+      onOpenFile: (path) => this.showCommitDiff(hash, path),
+    });
   },
   async showDiff(filePath, staged = this.files.find((file) => file.path === filePath)?.staged === true && !this.files.find((file) => file.path === filePath)?.unstaged) {
     if (!await this.leaveDiff()) return;
@@ -543,13 +585,50 @@ const chooseRepository = async () => ui.open(await ui.invoke(() => window.workbe
 $('#open-repo').addEventListener('click', chooseRepository);
 $('#empty-open').addEventListener('click', chooseRepository);
 $('#new-tab').addEventListener('click', chooseRepository);
+// Menu de l'application (remplace la barre de menu native) et ses raccourcis.
+const windowAction = (action) => ui.invoke(() => window.workbench.windowAction(action));
+const appMenu = () => {
+  const box = $('#app-menu').getBoundingClientRect();
+  showMenu([
+    ['Ouvrir un dépôt…', chooseRepository, false, 'Ctrl+O'],
+    ['Fermer l’onglet', () => ui.closeTab(ui.root), !ui.opened],
+    null,
+    ['Graphe', () => ui.showGraph(), !ui.opened],
+    ['Éditeur', () => ui.showEditor(), !ui.opened, 'Ctrl+P'],
+    null,
+    ['Zoom avant', () => windowAction('zoom-in'), false, 'Ctrl+='],
+    ['Zoom arrière', () => windowAction('zoom-out'), false, 'Ctrl+-'],
+    ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
+    ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
+    null,
+    ['Recharger la fenêtre', () => windowAction('reload')],
+    import.meta.env.DEV ? ['Outils de développement', () => windowAction('devtools'), false, 'Ctrl+Maj+I'] : undefined,
+    null,
+    ['Quitter', () => windowAction('quit')],
+  ], box.left, box.bottom + 4);
+};
+$('#app-menu').addEventListener('click', (event) => { event.stopPropagation(); appMenu(); });
+document.addEventListener('keydown', (event) => {
+  if (document.querySelector('dialog[open]')) return;
+  const ctrl = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+  const shortcut = ctrl && key === 'o' ? chooseRepository
+    : ctrl && (key === '=' || key === '+') ? () => windowAction('zoom-in')
+      : ctrl && key === '-' ? () => windowAction('zoom-out')
+        : ctrl && key === '0' ? () => windowAction('zoom-reset')
+          : event.key === 'F11' ? () => windowAction('fullscreen')
+            : import.meta.env.DEV && ctrl && event.shiftKey && key === 'i' ? () => windowAction('devtools') : null;
+  if (!shortcut) return;
+  event.preventDefault();
+  shortcut();
+});
 
 // Au lancement : rouvre les onglets de la session précédente et l'onglet qui était actif.
 (async () => {
   const session = await ui.invoke(() => window.workbench.restoreSession());
   if (!session?.snapshot) return;
   ui.tabs = session.tabs;
-  ui.open(session.snapshot, `Session restaurée : ${session.tabs.length} dépôt${session.tabs.length > 1 ? 's' : ''}.`);
+  ui.open(session.snapshot);
 })();
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());

@@ -10,6 +10,8 @@ function readPrefs() {
 }
 const prefs = readPrefs();
 const savePrefs = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* stockage indisponible */ } };
+// Partagées avec la revue de commit : côte à côte / en ligne et retour à la ligne valent pour tous les diffs.
+export { prefs as diffPrefs, savePrefs as saveDiffPrefs };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);

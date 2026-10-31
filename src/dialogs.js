@@ -56,8 +56,9 @@ export function showMenu(items, x, y) {
   const container = menu();
   container.replaceChildren(...items.filter((item) => item !== undefined && item !== false).map((item) => {
     if (item === null) return element('div', 'menu-separator');
-    const [text, action, disabled] = item;
+    const [text, action, disabled, shortcut] = item;
     const button = element('button', 'menu-item', text);
+    if (shortcut) button.append(element('span', 'menu-shortcut', shortcut));
     button.setAttribute('role', 'menuitem');
     button.disabled = Boolean(disabled);
     button.addEventListener('click', () => { hideMenu(); action(); });

@@ -106,7 +106,10 @@ monaco.editor.defineTheme('workbench', {
     'diffEditor.unchangedRegionForeground': '#81afb5',
     'editorWidget.background': '#14223a',
     'editorWidget.border': '#446374',
-    'scrollbarSlider.background': '#28455e80',
+    'scrollbarSlider.background': '#28455ecc',
+    'scrollbarSlider.hoverBackground': '#3a6079',
+    'scrollbarSlider.activeBackground': '#4b7590',
+    'scrollbar.shadow': '#00000000',
     'minimap.background': '#0a1124',
   },
 });

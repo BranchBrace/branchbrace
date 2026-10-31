@@ -10,7 +10,7 @@
     <script type="module" src="/main.js"></script>
   </head>
   <body>
-    <div class="tabbar"><div id="tabs" class="tabs" role="tablist" aria-label="Dépôts ouverts"></div><button id="new-tab" class="tab-add" title="Ouvrir un dépôt dans un nouvel onglet">＋</button></div>
+    <div class="tabbar"><button id="app-menu" class="app-menu-button" title="Menu" aria-label="Menu de l’application" aria-haspopup="menu"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button><div id="tabs" class="tabs" role="tablist" aria-label="Dépôts ouverts"></div><button id="new-tab" class="tab-add" title="Ouvrir un dépôt dans un nouvel onglet">＋</button></div>
     <header class="topbar">
       <div class="brand"><span class="brand-mark">G</span></div>
       <button id="open-repo" class="toolbar-field" title="Ouvrir un autre dépôt"><span class="eyebrow">DÉPÔT</span><strong id="repo-name">Aucun dépôt</strong></button>
@@ -40,9 +40,10 @@
         <div class="workspace-header" id="workspace-header" hidden><button id="back-to-graph" class="button secondary compact">← Graphe</button><h1 id="view-title"></h1><div id="view-tools" class="view-tools"></div></div>
         <div id="empty-state" class="empty-state"><div class="empty-icon">⌘</div><h2>Votre travail reste local</h2><p>Ouvrez un dépôt Git existant pour parcourir son graphe, préparer un commit et publier explicitement vers son upstream.</p><button id="empty-open" class="button primary">Ouvrir un dépôt local</button></div>
         <div id="diff-view" class="diff-view" hidden></div>
+        <div id="review-view" class="review-view" hidden></div>
         <div id="editor-view" class="editor-view" hidden></div>
         <div id="conflict-view" class="conflict-view" hidden></div>
-        <section class="graph-panel" id="graph-panel" hidden><div class="graph-row graph-head"><div class="cell refs">BRANCHE / TAG</div><div class="cell graph">GRAPHE</div><div class="cell message">MESSAGE DU COMMIT</div></div><div id="graph-rows" class="graph-rows"></div></section>
+        <section class="graph-panel" id="graph-panel" hidden><div class="graph-row graph-head"><div class="cell refs">BRANCHE</div><div class="cell graph">GRAPHE</div><div class="cell message">MESSAGE DU COMMIT</div></div><div id="graph-rows" class="graph-rows"></div></section>
       </section>
       <aside class="rightbar">
         <section id="commit-details" class="commit-details" hidden></section>
@@ -54,9 +55,9 @@
           </div>
           <button id="commit-button" class="button primary commit-button" disabled>Indexez des changements pour committer</button>
         </section>
-        <div id="status-message" class="status-message" role="status" aria-live="polite"></div>
       </aside>
     </main>
+    <div id="status-message" class="status-message" role="status" aria-live="polite"></div>
     <div id="context-menu" class="context-menu" role="menu" hidden></div>
   </body>
 </html>

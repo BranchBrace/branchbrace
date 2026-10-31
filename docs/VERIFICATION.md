@@ -24,13 +24,23 @@
 
 Qualité/build exercés dans l’environnement courant :
 
-- `npm test` : 18/18 tests passés (commande exécutée le 2026-10-31).
+- `npm test` : 18/18 tests passés (commande exécutée le 2026-10-31) ; au 2026-10-31 après MON-643 : 22/22 (19 tests d’intégration Git + 3 tests de packaging).
 - `npm run lint` et `npm run typecheck` via l’entrée npm directe : les deux scripts déclarés passent ; lint vérifie 8 fichiers JavaScript et typecheck les invariants du projet (`private: true`, `license: UNLICENSED`).
 - `npm run build` : Vite 7.3.7 et electron-builder 26.18.0 ont produit `artifacts/linux-unpacked` pour Linux x64 avec Electron 39.8.10.
 - Smoke de la fenêtre empaquetée : `xvfb-run -a env GIT_WORKBENCH_SMOKE=1 ELECTRON_DISABLE_GPU=1 artifacts/linux-unpacked/git-workbench --no-sandbox --disable-gpu` — code 0.
 - Limite de cet essai : pas de parcours manuel interactif de chaque contrôle UI ni de test de plateforme hors Debian 13 x86_64. Windows 10+ x64, macOS 12+ Intel/Apple Silicon, Ubuntu 22.04 x86_64 et Debian 12 x86_64 ne sont pas testés et ne sont pas déclarés supportés.
 
 Le wrapper terminal a d’abord mal parsé la sortie de lint (`ESLint output (JSON parse failed: EOF while parsing a value at line 1 column 0)`, code 1) ; le contrôle a été repris par l’entrée npm directe, avec succès. Il s’agit de vérifications locales, pas d’une exécution GitHub Actions. La build candidate actuelle est un répertoire Linux x64 unpacked (284 MiB) dans `artifacts/linux-unpacked`; le smoke test empaqueté sous `xvfb-run` retourne `Desktop window and isolated preload loaded.` (code 0). Aucun artefact Windows/macOS n’a été produit sur cet hôte Linux.
+
+## Installateur Linux x64 (`.deb`) — MON-643
+
+Format retenu : paquet Debian x64 (voir `docs/adr/0002-linux-installer.md`). Vérifié le 2026-10-31 :
+
+- Build : `npm run package:linux -- -c.extraMetadata.version=1.0.0-rc.1` depuis le commit `477a50e` (= `v1.0.0-rc.1` + ajout du packaging et du smoke installateur) ; electron-builder 26.18.0, fpm 1.17.0 (outil téléchargé par electron-builder), Electron 39.8.10. Sortie : `git-workbench_1.0.0-rc.1_amd64.deb`, 90 864 596 octets, version Debian `1.0.0~rc.1`, arch `amd64`, dépendance `git` déclarée.
+- SHA-256 : `0c44b6dec313e295d4427af715a1ef59a5ae225bb9bfbbf66b1515dbb98e6359`.
+- Smoke : `sh scripts/smoke-linux-installer.sh <deb>` — conteneur jetable `debian:trixie` (`sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1`), Docker 26.1.5, x86_64. Le script vérifie la somme, installe via `apt-get install ./…deb` (résolution des dépendances), contrôle `dpkg -s`, le lanceur `/usr/bin/git-workbench` et l’entrée `git-workbench.desktop`, lance l’application installée sous `xvfb-run` en utilisateur non root avec le sandbox Chromium actif (`chrome-sandbox` 755, espaces de noms utilisateur ; jamais `--no-sandbox`), lit un dépôt Git jetable via le pont preload → IPC → Git CLI, puis `apt-get purge` et contrôle l’absence de `/opt/Git Workbench`, du lanceur et de l’entrée de bureau. Résultat : code 0, `Desktop window and isolated preload loaded.`, `Repository read through preload IPC: {"branch":"main","files":1,"commits":1,"subject":"installer smoke"}`, `Purged cleanly`.
+- Isolation : aucun paquet installé sur l’hôte (`dpkg -s git-workbench` absent, pas de `/opt/Git Workbench`). Le conteneur lève les profils seccomp/AppArmor par défaut de Docker, qui interdisent les espaces de noms utilisateur autorisés par un Debian 13 standard.
+- Limites : seul Debian 13 x86_64 (conteneur, affichage virtuel) est vérifié ; pas de parcours UI manuel. Le repli SUID de `chrome-sandbox` (systèmes sans espaces de noms utilisateur) échoue dans un conteneur Docker sans privilèges et n’est pas vérifié. Paquet non signé, publié sur aucun dépôt APT ; aucune autre distribution, architecture ni OS n’est annoncé.
 
 ## Sécurité et confidentialité — limites explicites
 

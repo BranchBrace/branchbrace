@@ -160,26 +160,13 @@ app.whenReady().then(() => {
   handle('repository:commit:details', async (_event, { root, hash }) => service(root).commitDetails(hash));
   handle('repository:commit:file-diff', async (_event, { root, hash, path: filePath }) => service(root).commitFileDiff(hash, filePath));
   handle('repository:diff', async (_event, { root, path: filePath, staged }) => service(root).diff(filePath, staged === true));
-  handle('repository:stage', async (_event, { root, path: filePath }) => {
-    if (!await confirm('Ajouter au prochain commit ?', `Le fichier entier « ${filePath} » sera ajouté à l’index Git (pas de staging par hunk). Les hooks configurés peuvent s’exécuter lors du commit.`)) return null;
-    return service(root).stage(filePath);
-  });
-  handle('repository:unstage', async (_event, { root, path: filePath }) => {
-    if (!await confirm('Retirer de l’index ?', `Le fichier « ${filePath} » sera retiré de l’index. Son contenu de travail ne sera pas supprimé.`)) return null;
-    return service(root).unstage(filePath);
-  });
-  handle('repository:stage-all', async (_event, { root }) => {
-    if (!await confirm('Tout ajouter au prochain commit ?', 'Toutes les modifications, suppressions et nouveaux fichiers non ignorés seront ajoutés à l’index Git.')) return null;
-    return service(root).stageAll();
-  });
-  handle('repository:unstage-all', async (_event, { root }) => {
-    if (!await confirm('Tout retirer de l’index ?', 'L’index sera vidé. Le contenu de travail des fichiers ne sera pas modifié.')) return null;
-    return service(root).unstageAll();
-  });
-  handle('repository:commit', async (_event, { root, message }) => {
-    if (!await confirm('Créer le commit local ?', 'Seuls les changements déjà indexés seront commités. Les hooks de commit configurés par Git seront exécutés.')) return null;
-    return service(root).commit(message);
-  });
+  // Actions locales réversibles (index, commit, branches, cherry-pick avec point de récupération) : sans confirmation.
+  // Seuls le push (transmission hors de la machine) et les rebases (réécriture de l'historique) en demandent une.
+  handle('repository:stage', async (_event, { root, path: filePath }) => service(root).stage(filePath));
+  handle('repository:unstage', async (_event, { root, path: filePath }) => service(root).unstage(filePath));
+  handle('repository:stage-all', async (_event, { root }) => service(root).stageAll());
+  handle('repository:unstage-all', async (_event, { root }) => service(root).unstageAll());
+  handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));
   handle('repository:push', async (_event, { root, upstream }) => {
     const state = await service(root).status();
     if (!state.upstream) throw new GitWorkbenchError('upstream-missing');
@@ -188,25 +175,10 @@ app.whenReady().then(() => {
     return service(root).push(upstream);
   });
   handle('repository:branches', async (_event, { root }) => service(root).branches());
-  handle('repository:branch:create', async (_event, { root, name, startPoint }) => {
-    if (startPoint) {
-      const preview = await service(root).previewCommit(startPoint);
-      if (!await confirm('Créer une branche ici ?', `Créer « ${name} » sur ${preview.shortHash} — ${preview.subject}, sans changer de branche courante.`)) return null;
-      return service(root).createBranch(name, startPoint);
-    }
-    if (!await confirm('Créer et basculer de branche ?', `Créer « ${name} » à partir du HEAD actuel, puis basculer dessus.`)) return null;
-    return service(root).createBranch(name);
-  });
-  handle('repository:branch:switch', async (_event, { root, name }) => {
-    if (!await confirm('Changer de branche ?', `Demander à Git de basculer vers « ${name} ». Git refusera si cela risque d’écraser des changements locaux.`)) return null;
-    return service(root).switchBranch(name);
-  });
-  handle('repository:cherry-pick', async (_event, { root, commit }) => {
-    await service(root).assertClean();
-    const preview = await service(root).previewCommit(commit);
-    if (!await confirm('Appliquer un commit ?', `Cherry-pick ${preview.shortHash} — ${preview.subject}\n(hash complet : ${preview.hash})\n\nUn point de récupération local sera conservé; les hooks Git configurés peuvent s’exécuter.`)) return null;
-    return service(root).cherryPick(commit);
-  });
+  handle('repository:branch:create', async (_event, { root, name, startPoint }) => service(root).createBranch(name, startPoint || null));
+  // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
+  handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
+  handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
   handle('repository:rebase', async (_event, { root, upstream }) => {
     await service(root).assertClean();
     const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);

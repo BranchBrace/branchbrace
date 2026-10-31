@@ -196,6 +196,23 @@ test('interactive rebase rewords, squashes with the chosen message, reorders and
   await assert.rejects(service.interactiveRebase(base, [{ hash: git(repo, 'rev-parse', 'HEAD'), action: 'reword', message: ' ' }]), (error) => error.code === 'invalid-rebase-plan');
 });
 
+test('interactive rebase squashes across a dropped commit into the last kept one', async (t) => {
+  const { repo, service } = await fixture(t);
+  const base = git(repo, 'rev-parse', 'HEAD');
+  await commitFile(repo, 'one.txt', '1\n', 'one');
+  await commitFile(repo, 'two.txt', '2\n', 'two');
+  await commitFile(repo, 'three.txt', '3\n', 'three');
+  const [one, two, three] = (await service.interactiveRebaseCommits(base)).commits;
+  await service.interactiveRebase(base, [
+    { hash: one.hash, action: 'pick' },
+    { hash: two.hash, action: 'drop' },
+    { hash: three.hash, action: 'squash', message: 'one and three' },
+  ]);
+  assert.equal(git(repo, 'log', '--format=%s', `${base}..HEAD`), 'one and three');
+  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD').split('\n').sort().join(','), 'base.txt,one.txt,three.txt');
+  await assert.rejects(service.interactiveRebaseCommits(base).then(({ commits }) => service.interactiveRebase(base, [{ hash: commits[0].hash, action: 'squash', message: 'x' }])), (error) => error.code === 'invalid-rebase-plan');
+});
+
 test('conflict markers parse with diff3 bases and resolve block by block', () => {
   const text = 'a\r\n<<<<<<< HEAD\r\nmine\r\n||||||| base\r\norig\r\n=======\r\ntheirs\r\n>>>>>>> side\r\nz\n<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> side';
   const blocks = parseConflicts(text);

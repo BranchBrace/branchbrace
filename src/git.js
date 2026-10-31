@@ -619,7 +619,8 @@ export class GitService {
     let previousCanFixup = false;
     for (const item of plan) {
       if ((item.action === 'fixup' || item.action === 'squash') && !previousCanFixup) throw new GitWorkbenchError('invalid-rebase-plan');
-      previousCanFixup = item.action !== 'drop';
+      // Une ligne écartée disparaît du todo : un « squash » qui la suit se fond dans le dernier commit gardé.
+      if (item.action !== 'drop') previousCanFixup = true;
     }
     if (plan.every((item) => item.action === 'drop')) throw new GitWorkbenchError('invalid-rebase-plan');
     const steps = plan.map(({ hash, action, message }) => ((action === 'reword' || action === 'squash' || (action === 'fixup' && typeof message === 'string')) ? { hash, action, message } : { hash, action }));

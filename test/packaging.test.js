@@ -1,8 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+
+test('built renderer assets resolve beside the packaged file-based entry point', async () => {
+  const entryPoint = new URL('../dist/index.html', import.meta.url);
+  const html = await readFile(entryPoint, 'utf8');
+  const references = [
+    ...html.matchAll(/<script[^>]+src="([^"]+)"/g),
+    ...html.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/g),
+  ].map(([, reference]) => reference);
+
+  assert.ok(references.some((reference) => reference.endsWith('.css')), 'built HTML references a stylesheet');
+  assert.ok(references.some((reference) => reference.endsWith('.js')), 'built HTML references its application module');
+  for (const reference of references) {
+    assert.ok(!reference.startsWith('/'), `asset path must be relative to the file entry point: ${reference}`);
+    await access(fileURLToPath(new URL(reference, entryPoint)));
+  }
+
+  const stylesheet = references.find((reference) => reference.endsWith('.css'));
+  const css = await readFile(new URL(stylesheet, entryPoint), 'utf8');
+  assert.match(css, /\.topbar\s*\{/, 'the expected application styles are present');
+});
 
 test('Linux x64 installer is a Debian package that declares the Git CLI dependency', () => {
   assert.deepEqual(manifest.build.linux.target, [{ target: 'deb', arch: ['x64'] }]);

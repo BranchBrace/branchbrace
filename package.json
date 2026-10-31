@@ -12,7 +12,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && electron .\"",
     "lint": "node scripts/lint.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "node --test",
+    "test": "vite build && node --test",
     "build": "vite build && electron-builder --dir",
     "package:linux": "vite build && electron-builder --linux deb --x64",
     "package:win": "vite build && electron-builder --win nsis --x64",

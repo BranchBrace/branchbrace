@@ -56,12 +56,33 @@ jobs:
     needs: [semgrep, quality]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # id-token: OIDC federation with Azure for Artifact Signing (no stored secret).
+    permissions: {contents: write, packages: write, pull-requests: write, issues: write, id-token: write}
+    # Windows code signing (docs/adr/0004-windows-code-signing.md). Enabled as soon as the
+    # repository variable WINDOWS_SIGNING_ENDPOINT exists; until then the installer stays unsigned.
+    env:
+      WINDOWS_SIGNING_KEYSTORE: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ALIAS: ${{ vars.WINDOWS_SIGNING_ALIAS }}
+      WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: 22}
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Azure login for Artifact Signing (OIDC)
+        if: vars.WINDOWS_SIGNING_ENDPOINT != ''
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Artifact Signing access token
+        if: vars.WINDOWS_SIGNING_ENDPOINT != ''
+        run: |
+          token=$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)
+          echo "::add-mask::$token"
+          echo "WINDOWS_SIGNING_STOREPASS=$token" >> "$GITHUB_ENV"
       - name: Semantic release (rc = prerelease, main = stable)
         run: >-
           npx -y -p semantic-release@24 -p @semantic-release/changelog@6 -p @semantic-release/git@10

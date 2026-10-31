@@ -110,6 +110,13 @@ function parseStatus(raw) {
   return files;
 }
 
+// Packaged Electron's execPath is the app binary: without this flag the rebase plan editor
+// would start a second app window instead of running the script (which lives inside app.asar).
+// The assignment prefixes only the editor command (Git runs it through sh), so user hooks never inherit it.
+export function sequenceEditorRuntimePrefix(versions = process.versions) {
+  return versions.electron ? 'ELECTRON_RUN_AS_NODE=1 ' : '';
+}
+
 export class GitService {
   constructor(repositoryPath) {
     this.repositoryPath = path.resolve(repositoryPath);
@@ -274,7 +281,7 @@ export class GitService {
     const editorPath = fileURLToPath(new URL('../scripts/apply-rebase-plan.mjs', import.meta.url));
     await writeFile(planPath, JSON.stringify(plan), { mode: 0o600 });
     const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-    const sequenceEditor = `${quote(process.execPath)} ${quote(editorPath)} ${quote(planPath)}`;
+    const sequenceEditor = `${sequenceEditorRuntimePrefix()}${quote(process.execPath)} ${quote(editorPath)} ${quote(planPath)}`;
     try {
       try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { GIT_SEQUENCE_EDITOR: sequenceEditor, GIT_WORKBENCH_REBASE_PLAN: planPath } }); }
       catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }

@@ -31,10 +31,10 @@ docker run --rm --network bridge --security-opt seccomp=unconfined --security-op
 
   useradd -m tester
   su tester -c "git init -q -b main /home/tester/sample && cd /home/tester/sample \
-    && git -c user.name=Smoke -c user.email=smoke@example.invalid commit -q --allow-empty -m \"installer smoke\" \
-    && echo changed > untracked.txt"
-  su tester -c "cd /home/tester && GIT_WORKBENCH_SMOKE=1 GIT_WORKBENCH_SMOKE_REPO=/home/tester/sample ELECTRON_DISABLE_GPU=1 \
-    xvfb-run -a git-workbench --disable-gpu 2>/tmp/stderr.log" || { echo "Launch failed:"; tail -n 20 /tmp/stderr.log; exit 1; }
+    && git config user.name Smoke && git config user.email smoke@example.invalid \
+    && for n in base first \"installer smoke\"; do git commit -q --allow-empty -m \"\$n\"; done"
+  su tester -c "cd /home/tester && GIT_WORKBENCH_SMOKE=1 GIT_WORKBENCH_SMOKE_REPO=/home/tester/sample GIT_WORKBENCH_SMOKE_REWRITE=1 \
+    ELECTRON_DISABLE_GPU=1 timeout 120 xvfb-run -a git-workbench --disable-gpu 2>/tmp/stderr.log" || { echo "Launch failed:"; tail -n 20 /tmp/stderr.log; exit 1; }
 
   apt-get purge -y -qq git-workbench >/dev/null
   if dpkg -s git-workbench >/dev/null 2>&1; then echo "Package still installed" >&2; exit 1; fi

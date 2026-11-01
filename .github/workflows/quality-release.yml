@@ -55,7 +55,9 @@ jobs:
   release:
     needs: [semgrep, quality]
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    # Pinned: on the ubuntu26 image, Wine inside electronuserland/builder:wine fails
+    # with "socket: Function not implemented" while building the NSIS installer.
+    runs-on: ubuntu-24.04
     # id-token: OIDC federation with Azure for Artifact Signing (no stored secret).
     permissions: {contents: write, packages: write, pull-requests: write, issues: write, id-token: write}
     # Windows code signing (docs/adr/0004-windows-code-signing.md). Enabled as soon as the

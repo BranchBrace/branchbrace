@@ -139,3 +139,46 @@ export function confirmDialog({ title, message }) {
 export function alertDialog({ title, message }) {
   return modal(title, [element('p', 'dialog-message', message)], { confirmLabel: 'OK', cancelLabel: null, collect: () => true });
 }
+
+// Création d'un tag : annoté (message obligatoire) par défaut, léger si la case est décochée.
+export function askTag({ target }) {
+  const name = element('input', 'text-input');
+  name.spellcheck = false;
+  const nameField = element('label', 'dialog-field');
+  nameField.append(element('span', 'eyebrow', 'NOM DU TAG'), name);
+  const annotated = element('input');
+  annotated.type = 'checkbox';
+  annotated.checked = true;
+  const annotatedLabel = element('label', 'dialog-check');
+  annotatedLabel.append(annotated, ' Tag annoté (auteur, date et message)');
+  const message = element('textarea');
+  message.rows = 3;
+  const messageField = element('label', 'dialog-field');
+  messageField.append(element('span', 'eyebrow', 'MESSAGE'), message);
+  annotated.addEventListener('change', () => { messageField.hidden = !annotated.checked; });
+  const hint = element('p', 'dialog-hint', `Le tag pointera sur ${target}. Il reste local tant qu’il n’est pas poussé.`);
+  setTimeout(() => name.focus());
+  return modal('Créer un tag', [nameField, annotatedLabel, messageField, hint], {
+    confirmLabel: 'Créer',
+    collect: () => ({ name: name.value.trim(), annotated: annotated.checked, message: message.value.trim() }),
+    validate: (value) => (!value.name ? 'Un nom est requis.' : value.annotated && !value.message ? 'Un tag annoté demande un message.' : null),
+  });
+}
+
+// Choix unique parmi `options` ([{ value, label }]) ; la première est présélectionnée.
+export function askChoice({ title, message, options, confirmLabel }) {
+  const group = `choice-${Date.now()}`;
+  const inputs = options.map((option, index) => {
+    const input = element('input');
+    input.type = 'radio';
+    input.name = group;
+    input.checked = index === 0;
+    const label = element('label', 'dialog-check');
+    label.append(input, ` ${option.label}`);
+    return { input, label, value: option.value };
+  });
+  return modal(title, [element('p', 'dialog-message', message), ...inputs.map((item) => item.label)], {
+    confirmLabel,
+    collect: () => inputs.find((item) => item.input.checked)?.value ?? null,
+  });
+}

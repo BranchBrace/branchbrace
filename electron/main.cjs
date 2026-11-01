@@ -366,6 +366,16 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
+  // Revert et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
+  handle('repository:revert', async (_event, { root, commit, mainline }) => service(root).revert(commit, mainline ?? null));
+  handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
+  handle('repository:tag:push', async (_event, { root, name, remote }) => {
+    const refs = await service(root).references();
+    if (!refs.tags.some((tag) => tag.name === name)) throw new GitWorkbenchError('tag-not-found');
+    if (!refs.remotes.some((item) => item.name === remote)) throw new GitWorkbenchError('remote-not-found');
+    if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
+    return service(root).pushTag(name, remote);
+  });
   // Merge local : la page montre d'abord les commits entrants, puis le merge porte sur le commit prévisualisé
   // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
   handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));

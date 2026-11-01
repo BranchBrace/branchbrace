@@ -187,6 +187,7 @@ dialog:has(.cc-types){max-width:640px}
 .cc-type-label{font-size:10.5px;color:#81afb5}
 .cc-scope-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .cc-breaking{display:flex;align-items:center;gap:6px;margin:12px 0 6px;font-size:12px;color:#c3dfdc}
+.dialog-check{display:flex;align-items:center;gap:6px;margin:10px 0 6px;font-size:12px;color:#c3dfdc}
 .cc-note{min-height:50px}
 .cc-preview{display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 12px;border-radius:8px;background:#070c1d;border:1px solid var(--line)}
 .cc-header{flex:1;font:13px var(--mono);color:var(--accent);overflow-wrap:anywhere}

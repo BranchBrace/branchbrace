@@ -693,6 +693,52 @@ export class GitService {
     return this.status();
   }
 
+  // Tag sur un commit : annoté (avec message) par défaut, léger si `annotated` est faux. Un tag existant n'est jamais remplacé.
+  async createTag(name, commit, { annotated = true, message = '' } = {}) {
+    await this.#ensureRepositoryPath();
+    await this.#checkRefName('refs/tags/', name, 'invalid-tag-name');
+    const hash = await this.#resolveCommit(commit);
+    if (annotated && (typeof message !== 'string' || !message.trim())) throw new GitWorkbenchError('tag-message-required');
+    if (await this.#refExists(`refs/tags/${name}`)) throw new GitWorkbenchError('tag-exists');
+    await runGit(this.repositoryPath, annotated ? ['tag', '--annotate', '--message', message, name, hash] : ['tag', name, hash]);
+    return { name, hash, annotated: Boolean(annotated) };
+  }
+
+  // Pousse ce seul tag (jamais `--tags`) vers un dépôt distant configuré, puis vérifie qu'il y pointe sur le même objet.
+  async pushTag(name, remote) {
+    await this.#ensureRepositoryPath();
+    await this.#checkRefName('refs/tags/', name, 'invalid-tag-name');
+    const remotes = (await runGit(this.repositoryPath, ['remote'])).split('\n').filter(Boolean);
+    if (typeof remote !== 'string' || !remotes.includes(remote)) throw new GitWorkbenchError('remote-not-found');
+    if (!await this.#refExists(`refs/tags/${name}`)) throw new GitWorkbenchError('tag-not-found');
+    const object = (await runGit(this.repositoryPath, ['rev-parse', '--verify', `refs/tags/${name}`])).trim();
+    await runGit(this.repositoryPath, ['push', '--porcelain', remote, `refs/tags/${name}`]);
+    const remoteRef = await runGit(this.repositoryPath, ['ls-remote', '--tags', remote, `refs/tags/${name}`]);
+    const actual = remoteRef.split('\n').map((line) => line.split(/\s+/)).find(([, ref]) => ref === `refs/tags/${name}`)?.[0];
+    if (actual !== object) throw new GitWorkbenchError('push-verification-failed');
+    return { name, remote, hash: actual };
+  }
+
+  // Crée le commit inverse d'un commit, même déjà poussé (l'historique n'est pas réécrit). Pour un merge, `mainline`
+  // désigne le parent (numéroté à partir de 1) dont on garde la version. Un conflit laisse un revert à résoudre.
+  async revert(commit, mainline = null) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(commit);
+    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    await this.#assertClean();
+    const parents = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
+    const args = ['revert', '--no-edit'];
+    if (parents.length > 1) {
+      if (!Number.isInteger(mainline) || mainline < 1 || mainline > parents.length) throw new GitWorkbenchError('revert-mainline-required');
+      args.push('-m', String(mainline));
+    } else if (mainline !== null) throw new GitWorkbenchError('revert-mainline-invalid');
+    const recoveryRef = await this.#saveRecoveryRef('revert');
+    try { await runGit(this.repositoryPath, [...args, hash], { env: { GIT_EDITOR: 'true' } }); }
+    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'revert'); }
+    const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    return { hash: head, recoveryRef, status: await this.status() };
+  }
+
   // Message complet du dernier commit, proposé pour le modifier lors d'un amend.
   async headMessage() {
     await this.#ensureRepositoryPath();
@@ -1218,6 +1264,16 @@ export class GitService {
     const ref = `refs/git-workbench/recovery/${operation}-${Date.now()}-${randomUUID().slice(0, 8)}`;
     await runGit(this.repositoryPath, ['update-ref', ref, head]);
     return ref;
+  }
+
+  // Nom complet `prefixe + nom` vérifié par `git check-ref-format` (sans --branch, qui accepterait « @{-1} »).
+  async #checkRefName(prefix, name, code) {
+    if (typeof name !== 'string' || !name || name.length > 255 || name !== name.trim() || name.startsWith('-') || name.includes('\0')) throw new GitWorkbenchError(code);
+    await runGit(this.repositoryPath, ['check-ref-format', `${prefix}${name}`]).catch(() => { throw new GitWorkbenchError(code); });
+  }
+
+  async #refExists(ref) {
+    return (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--quiet', ref], { acceptExitCodes: [1] })).trim() !== '';
   }
 
   #validateBranchName(name) {

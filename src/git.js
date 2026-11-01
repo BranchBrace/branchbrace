@@ -11,7 +11,8 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 const MAX_EDITABLE = 5 * 1024 * 1024;
 // Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
-const REBASE_ACTIONS = ['pick', 'reword', 'squash', 'fixup', 'drop'];
+const REBASE_ACTIONS = ['pick', 'reword', 'split', 'squash', 'fixup', 'drop'];
+
 // Blob vide : une entrée « intent-to-add » (git add -N) le désigne sans qu'il soit forcément écrit dans les objets.
 const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 
@@ -323,7 +324,7 @@ export class GitService {
       runGit(this.repositoryPath, ['status', '--porcelain=v1', '--branch', '-z', '--untracked-files=all']),
       this.operation(),
     ]);
-    return { ...parseStatus(raw), operation };
+    return { ...parseStatus(raw), operation, split: operation === 'rebase' ? await this.#splitState() : null };
   }
 
   // Opération Git interrompue (en général par un conflit) qu'il reste à continuer ou annuler.
@@ -990,10 +991,14 @@ export class GitService {
   // par Git (celui du commit rejoué) au lieu d'ouvrir un éditeur que personne ne verrait.
   async continueOperation() {
     const operation = await this.#pendingOperation();
-    if ((await this.status()).files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    const status = await this.status();
+    if (status.files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    // Pendant un découpage, Git refuserait de continuer avec des changements non commités : on l'explique avant.
+    if (status.split && status.files.length) throw new GitWorkbenchError('split-changes-remaining');
     try { await runGit(this.repositoryPath, [operation, '--continue'], { env: await this.#operationEditors(operation) }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { operation, status: await this.status() };
   }
 
@@ -1004,6 +1009,7 @@ export class GitService {
     try { await runGit(this.repositoryPath, [operation, '--skip'], { env: await this.#operationEditors(operation) }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { operation, status: await this.status() };
   }
 
@@ -1076,7 +1082,52 @@ export class GitService {
     try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { ...await this.#rebaseEditors(), GIT_SEQUENCE_EDITOR: this.#rebaseEditorCommand() } }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { recoveryRef, status: await this.status() };
+  }
+
+  // Découpe un commit de la branche courante : rebase interactif qui s'arrête sur lui (les commits suivants restent
+  // « gardés »), puis retrait de ce seul commit pour que ses changements reviennent, non indexés, dans l'arbre de
+  // travail. On les recommitte en plusieurs morceaux, puis « Continuer » rejoue la suite de la branche.
+  async splitCommit(revision) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(revision);
+    const parents = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
+    // Un commit racine n'a pas de parent sur lequel s'arrêter, un merge ne se découpe pas en morceaux de diff.
+    if (parents.length !== 1) throw new GitWorkbenchError('split-unsupported');
+    try { await runGit(this.repositoryPath, ['merge-base', '--is-ancestor', hash, 'HEAD']); }
+    catch { throw new GitWorkbenchError('split-not-on-branch'); }
+    // Le rebase aplatirait les merges qui suivent le commit : on refuse plutôt que de réécrire plus que demandé.
+    if (Number((await runGit(this.repositoryPath, ['rev-list', '--merges', '--count', `${parents[0]}..HEAD`])).trim())) throw new GitWorkbenchError('split-unsupported');
+    const { commits } = await this.interactiveRebaseCommits(parents[0]);
+    return this.interactiveRebase(parents[0], commits.map((commit) => ({ hash: commit.hash, action: commit.hash === hash ? 'split' : 'pick' })));
+  }
+
+  // Commit en cours de découpage : rebase arrêté (« edit ») sur un commit que le plan marque « split ».
+  // `ready` : ce commit a déjà été retiré, ses changements attendent dans l'arbre de travail.
+  async #splitState() {
+    const planPath = await this.#rebasePlanPath();
+    if (!existsSync(planPath)) return null;
+    const directory = path.join(await this.#gitDirectory(), 'rebase-merge');
+    const [plan, done, amend] = await Promise.all([
+      readFile(planPath, 'utf8').then(JSON.parse).catch(() => []),
+      readFile(path.join(directory, 'done'), 'utf8').catch(() => ''),
+      readFile(path.join(directory, 'amend'), 'utf8').catch(() => null),
+    ]);
+    // Dernière ligne de `done` : l'étape sur laquelle le rebase est arrêté.
+    const current = /^(?:edit|e)\s+([0-9a-f]+)/.exec(done.trim().split('\n').at(-1)?.trim() || '');
+    const item = current && plan.find((step) => step.action === 'split' && step.hash.startsWith(current[1]));
+    if (!item || amend === null) return null;
+    const head = await runGit(this.repositoryPath, ['rev-parse', 'HEAD']).then((value) => value.trim(), () => null);
+    const record = await runGit(this.repositoryPath, ['show', '-s', '--format=%h%x00%B', item.hash]);
+    const [shortHash, ...message] = record.split('\0');
+    return { hash: item.hash, shortHash, message: message.join('\0').trimEnd(), ready: head !== amend.trim() };
+  }
+
+  async #prepareSplitStop() {
+    if (await this.operation() !== 'rebase') return;
+    const split = await this.#splitState();
+    if (split && !split.ready) await runGit(this.repositoryPath, ['reset', '--quiet', 'HEAD~1']);
   }
 
   // Ce qu'un merge de `source` ferait entrer dans la branche courante : ses commits absents de HEAD (les 200 plus

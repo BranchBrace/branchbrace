@@ -441,6 +441,16 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
     // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
   });
+  // Découpage : réécrit la branche à partir du commit choisi, d'où la confirmation et le point de récupération.
+  handle('repository:split', async (_event, { root, hash }) => {
+    const target = service(root);
+    await target.assertClean();
+    const commit = await target.previewCommit(hash);
+    if (!await confirm('Découper ce commit ?', `« ${commit.subject} » (${commit.shortHash}) va être retiré de la branche et ses changements remis dans l’arbre de travail. Committez-les en plusieurs morceaux (par fichier, par bloc ou par ligne), puis « Continuer » rejoue les commits suivants.
+
+Un point de récupération local sera conservé ; « Annuler » revient à l’état d’avant. Si ce commit est déjà poussé, la branche divergera de sa distante (l’application ne force jamais un push).`)) return null;
+    return target.splitCommit(commit.hash);
+  });
   // Coloration par les grammaires TextMate : fichiers lus ici, sur le disque local uniquement. La page demande une grammaire
   // par sa portée ; l'import d'un .vsix passe par le sélecteur de fichiers, jamais par un chemin reçu de la page.
   handle('grammars:catalog', async () => (await scanGrammars()).catalog);

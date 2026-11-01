@@ -33,7 +33,7 @@ for (const { hash } of plan) {
   byFullHash.set(hash, matches[0]);
 }
 if (commits.length !== plan.length) process.exit(3);
-const valid = new Set(['pick', 'reword', 'squash', 'fixup', 'drop']);
+const valid = new Set(['pick', 'reword', 'split', 'squash', 'fixup', 'drop']);
 if (plan.some(({ action }) => !valid.has(action))) process.exit(4);
 let priorCanAcceptFixup = false;
 for (const item of plan) {
@@ -42,5 +42,6 @@ for (const item of plan) {
   priorCanAcceptFixup = true;
 }
 const comments = todo.split('\n').filter((line) => !COMMAND.test(line));
-const lines = plan.map(({ action, hash }) => `${action} ${hash}${byFullHash.get(hash).subject}`);
+// « split » est un arrêt « edit » : l'application retire ensuite le commit pour qu'il soit recommitté en morceaux.
+const lines = plan.map(({ action, hash }) => `${action === 'split' ? 'edit' : action} ${hash}${byFullHash.get(hash).subject}`);
 await writeFile(targetPath, `${[...comments, ...lines].filter(Boolean).join('\n')}\n`, 'utf8');

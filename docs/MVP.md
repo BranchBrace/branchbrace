@@ -2,7 +2,7 @@
 
 ## Goal and user
 
-An independent, local desktop Git client for a solo developer who is comfortable with Git. GitKraken Desktop is a functional reference only. Do not copy its code, name, branding, text, or assets. This repository is proprietary and private: `UNLICENSED`, All Rights Reserved (see `LICENSE`). No public publication or launch is authorised.
+An independent, local desktop Git client for a solo developer who is comfortable with Git. GitKraken Desktop is a functional reference only. Do not copy its code, name, branding, text, or assets. The source is open under the MIT licence (see `LICENSE`); it was proprietary (`UNLICENSED`) until 2026-11-01.
 
 The first release supports this workflow on an existing local repository with Git CLI installed:
 

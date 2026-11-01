@@ -10,7 +10,7 @@ if (result.status !== 0) {
   process.exit(result.status || 1);
 }
 const manifest = JSON.parse(await (await import('node:fs/promises')).readFile('package.json', 'utf8'));
-if (manifest.license !== 'UNLICENSED' || manifest.private !== true) throw new Error('Package must remain private and UNLICENSED.');
+if (manifest.license !== 'MIT' || manifest.private !== true) throw new Error('Package must remain private and MIT-licensed.');
 const source = (await readdir('src')).join(' ');
 if (!source.includes('main.js') || !source.includes('index.html')) throw new Error('Desktop entry point is missing.');
 process.stdout.write('Project invariants checked.\n');

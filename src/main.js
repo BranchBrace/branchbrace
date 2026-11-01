@@ -3,6 +3,7 @@ import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
 import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
+import { chooseIntegration, confirmMerge } from './merge-dialog.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
 import { describeError } from './errors.js';
@@ -19,7 +20,7 @@ const views = () => (viewsLoading ??= Promise.all([import('./diff-panel.js'), im
   .then(([diff, editor, conflict, review]) => (monacoViews = { ...diff, ...editor, ...conflict, ...review })));
 const OPERATION_NAMES = { rebase: 'Rebase', 'cherry-pick': 'Cherry-pick', merge: 'Merge', revert: 'Revert' };
 // Opération enregistrée dans un point de reprise, telle qu'Undo l'annonce.
-const RECOVERY_NAMES = { amend: 'amend', 'cherry-pick': 'cherry-pick', rebase: 'rebase', 'interactive-rebase': 'rebase interactif', redo: 'Redo' };
+const RECOVERY_NAMES = { amend: 'amend', 'cherry-pick': 'cherry-pick', rebase: 'rebase', 'interactive-rebase': 'rebase interactif', merge: 'merge', pull: 'pull', redo: 'Redo' };
 const operationLabel = (operation) => RECOVERY_NAMES[operation] || operation;
 
 const ui = {
@@ -133,7 +134,7 @@ const ui = {
     this.details = null;
     $('#repo-name').textContent = 'Aucun dépôt';
     $('#branch-name').textContent = '—';
-    for (const id of ['#new-branch', '#refresh', '#push-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor', '#undo-button', '#redo-button']) $(id).disabled = true;
+    for (const id of ['#new-branch', '#refresh', '#push-button', '#pull-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor', '#undo-button', '#redo-button']) $(id).disabled = true;
     this.setView(null);
     $('#operation-banner').hidden = true;
     $('#empty-state').hidden = false;
@@ -181,6 +182,8 @@ const ui = {
     $('#branch-name').textContent = status.branch;
     $('#push-button').disabled = !status.upstream;
     $('#push-button').title = status.upstream ? `Pousser vers ${status.upstream}` : 'Upstream non configuré';
+    $('#pull-button').disabled = !status.upstream;
+    $('#pull-button').title = status.upstream ? `Récupérer ${status.upstream} puis avancer la branche (fast-forward seul)` : 'Upstream non configuré';
     if (this.selectedCommit !== WIP && !this.graph.commits.some((commit) => commit.hash === this.selectedCommit)) { this.selectedCommit = WIP; this.details = null; }
     this.renderGraph();
     this.renderRefs();
@@ -571,6 +574,31 @@ const ui = {
     const result = await this.act(() => window.workbench.interactiveRebase(ui.root, onto, plan));
     if (result) { await this.reload(); this.message(`Rebase interactif terminé. Récupération conservée : ${result.recoveryRef}.`); }
   },
+  // Les commits entrants s'affichent avant tout changement ; un refus (conflit compris) recharge la vue pour montrer
+  // l'opération en cours.
+  async merge(source, label = source) {
+    const preview = await this.act(() => window.workbench.mergePreview(ui.root, source));
+    if (!preview) return;
+    if (!preview.total) { this.message(`« ${this.branch} » contient déjà tous les commits de « ${label} ».`); return; }
+    const choice = await confirmMerge({ source: label, branch: this.branch, preview });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.merge(ui.root, source, preview.target, choice.fastForward));
+    await this.reload();
+    if (result) this.message(`${result.fastForwarded ? 'Fast-forward' : 'Merge'} de « ${label} » terminé. Récupération conservée : ${result.recoveryRef}.`);
+  },
+  async pull() {
+    if (!this.upstream) return;
+    $('#pull-button').disabled = true;
+    this.message(`Pull depuis ${this.upstream}…`);
+    const result = await this.act(() => window.workbench.pull(ui.root, this.upstream));
+    await this.reload();
+    if (!result) return;
+    if (result.pulled) { this.message(`Pull terminé : ${result.behind} commit(s) intégré(s) en fast-forward. Récupération conservée : ${result.recoveryRef}.`); return; }
+    if (!result.diverged) { this.message(`« ${this.branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
+    const choice = await chooseIntegration({ branch: this.branch, ...result });
+    if (choice === 'merge') await this.merge(result.upstream);
+    else if (choice === 'rebase') await this.rebase(result.upstream);
+  },
   async push() {
     const result = await this.act(() => window.workbench.push(ui.root, this.upstream));
     if (result) { await this.reload(); this.message(`Push vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}).`); }
@@ -581,6 +609,7 @@ const ui = {
     showMenu([
       ['Créer une branche ici…', () => this.createBranch(commit.hash)],
       ['Cherry-pick ce commit', () => this.cherryPick(commit.hash)],
+      [`Merger ${short} dans « ${this.branch} »…`, () => this.merge(commit.hash, short)],
       [`Rebaser « ${this.branch} » sur ${short}`, () => this.rebase(commit.hash)],
       [`Rebase interactif de « ${this.branch} » depuis ${short}…`, () => this.interactiveRebase(commit.hash, short)],
       null,
@@ -597,7 +626,9 @@ const ui = {
       if (remote.trackedBy) items.push([`Basculer sur « ${remote.trackedBy} » (qui la suit)`, () => this.checkout(remote.trackedBy), remote.trackedBy === this.branch]);
       else items.push([`Créer « ${remote.branch || ref.name} » en local et basculer`, () => this.checkoutRemote(ref.name)]);
     }
+    if (isCurrent) items.push([this.upstream ? `Pull depuis ${this.upstream}` : 'Pull (upstream non configuré)', () => this.pull(), !this.upstream]);
     if (isCurrent) items.push([this.upstream ? `Push vers ${this.upstream}` : 'Push (upstream non configuré)', () => this.push(), !this.upstream]);
+    if (!isCurrent) items.push([`Merger « ${ref.name} » dans « ${this.branch} »…`, () => this.merge(ref.name)]);
     if (kind !== 'tags' && !isCurrent) {
       items.push([`Rebaser « ${this.branch} » sur « ${ref.name} »`, () => this.rebase(ref.name)]);
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);
@@ -687,6 +718,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 $('#push-button').addEventListener('click', () => ui.push());
+$('#pull-button').addEventListener('click', () => ui.pull());
 $('#undo-button').addEventListener('click', () => ui.undo());
 $('#redo-button').addEventListener('click', () => ui.redo());
 // Ctrl+Z / Ctrl+Maj+Z (ou Ctrl+Y) hors d'un champ de saisie ou de l'éditeur, qui gardent leur propre annulation.

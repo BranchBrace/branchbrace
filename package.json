@@ -2,7 +2,7 @@
   "name": "branchbrace",
   "description": "Desktop client Git local, privé et sans télémétrie.",
   "author": "MonniHermes",
-  "homepage": "https://github.com/MonniHermes/git-workbench",
+  "homepage": "https://github.com/BranchBrace/branchbrace",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",

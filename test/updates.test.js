@@ -7,7 +7,7 @@ import path from 'node:path';
 import { checkForUpdate, compareVersions, downloadInstaller, readUpdateSettings, selectRelease, writeUpdateSettings } from '../src/updates.js';
 
 const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-const DOWNLOADS = 'https://github.com/MonniHermes/git-workbench/releases/download';
+const DOWNLOADS = 'https://github.com/BranchBrace/branchbrace/releases/download';
 
 function release(tag, prerelease, extra = {}) {
   const name = `BranchBrace.Setup.${tag.slice(1)}.exe`;
@@ -15,7 +15,7 @@ function release(tag, prerelease, extra = {}) {
     tag_name: tag,
     prerelease,
     draft: false,
-    html_url: `https://github.com/MonniHermes/git-workbench/releases/tag/${tag}`,
+    html_url: `https://github.com/BranchBrace/branchbrace/releases/tag/${tag}`,
     published_at: '2026-10-31T23:26:00Z',
     assets: [
       { name, size: 4, browser_download_url: `${DOWNLOADS}/${tag}/${name}` },
@@ -58,7 +58,7 @@ test('the stable channel ignores prereleases; the beta channel takes the newest 
 });
 
 test('an update is offered only when the channel has a newer version', async () => {
-  const fetch = respond({ 'https://api.github.com/repos/MonniHermes/git-workbench/releases?per_page=50': RELEASES });
+  const fetch = respond({ 'https://api.github.com/repos/BranchBrace/branchbrace/releases?per_page=50': RELEASES });
   const stable = await checkForUpdate({ currentVersion: '1.0.0', channel: 'stable', platform: 'win32', fetch });
   assert.equal(stable.available, false);
   assert.equal(stable.latest.version, '1.0.0');
@@ -75,13 +75,13 @@ test('an update is offered only when the channel has a newer version', async () 
   const linux = await checkForUpdate({ currentVersion: '0.9.0', channel: 'stable', platform: 'linux', fetch });
   assert.equal(linux.available, true);
   assert.equal(linux.latest.installer, null, 'no installer outside Windows: the release page is opened instead');
-  assert.equal(linux.latest.page, 'https://github.com/MonniHermes/git-workbench/releases/tag/v1.0.0');
+  assert.equal(linux.latest.page, 'https://github.com/BranchBrace/branchbrace/releases/tag/v1.0.0');
 });
 
 test('installer assets hosted outside the project releases are never offered', async () => {
   const foreign = release('v1.2.0', false);
   foreign.assets[0].browser_download_url = 'https://example.com/BranchBrace.Setup.1.2.0.exe';
-  const fetch = respond({ 'https://api.github.com/repos/MonniHermes/git-workbench/releases?per_page=50': [foreign] });
+  const fetch = respond({ 'https://api.github.com/repos/BranchBrace/branchbrace/releases?per_page=50': [foreign] });
   const result = await checkForUpdate({ currentVersion: '1.0.0', channel: 'stable', platform: 'win32', fetch });
   assert.equal(result.available, true);
   assert.equal(result.latest.installer, null);

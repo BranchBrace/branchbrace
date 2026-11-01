@@ -130,19 +130,25 @@ button.toolbar-field:hover{background:#182b42}
 .kind{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:10px;background:color-mix(in srgb,currentColor 14%,transparent)}
 .change-A{color:#b7d974}.change-M{color:#e2b570}.change-D{color:#bc5960}.change-R,.change-C{color:#3fa0a4}.change-T,.change-U{color:#913a52}.change-\?{color:#86e0ce}
 .details-files{overflow:auto;min-height:0;flex:1;display:flex;flex-direction:column;gap:1px;margin:0 -6px}
-.details-file{display:flex;gap:9px;align-items:center;color:#c3dfdc;padding:6px;border-radius:6px;cursor:pointer;font-size:12px;border-left:2px solid transparent}
+.details-file{display:flex;gap:8px;align-items:center;color:#c3dfdc;padding:3px 6px;min-height:26px;border-radius:5px;cursor:pointer;font-size:12px;border-left:2px solid transparent}
 .details-file:hover{background:#1c3048}
 .details-file.selected{background:#22405a;border-left-color:var(--accent)}
 .details-file:focus-visible{outline:1px solid var(--accent)}
 .change-badge{width:18px;height:18px;flex:none;display:grid;place-items:center;border-radius:4px;font-size:10.5px;font-weight:850;background:color-mix(in srgb,currentColor 16%,transparent);border:1px solid color-mix(in srgb,currentColor 45%,transparent)}
-.file-names{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3}
+.file-names{display:flex;align-items:baseline;min-width:0;flex:1;line-height:1.35;white-space:nowrap}
 .file-name{font-weight:650;color:#e3f5f1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-folder{font-size:10.5px;color:#5c8290;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Une seule ligne : le dossier, en retrait, se tronque par la gauche avant le nom du fichier. */
+.details-file .file-folder{font-size:inherit;color:#6d929d;flex:0 1000 auto;min-width:0;direction:rtl;text-align:left}
+.details-file .file-name{flex:0 1 auto;min-width:0;font-weight:500}
+.change-icon{width:16px;height:16px;flex:none;display:grid;place-items:center}
+.change-icon svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .file-stat{display:flex;align-items:center;gap:5px;font:700 11px var(--mono);flex:none}
 .blocks{display:flex;gap:1px}
 .blocks i{width:6px;height:6px;border-radius:1px;background:#24405a}
 .blocks i.plus{background:#b7d974}.blocks i.minus{background:#bc5960}
-.details-file .stage{border:1px solid #446374;background:#1f394d;color:#d4ebe6;border-radius:5px;cursor:pointer;flex:none;width:22px;height:22px}
+.details-file .stage{border:1px solid #446374;background:#1f394d;color:#d4ebe6;border-radius:5px;cursor:pointer;flex:none;width:20px;height:20px;line-height:1;padding:0;visibility:hidden}
+.details-file:hover .stage,.details-file:focus-within .stage,.details-file.selected .stage{visibility:visible}
 .details-file .stage:hover{border-color:var(--accent);color:var(--accent)}
 
 /* Panneau droit : staging et commit */
@@ -150,7 +156,8 @@ button.toolbar-field:hover{background:#182b42}
 .branch-chip{padding:2px 8px;border-radius:4px;background:#3fa0a4;color:#070c1d;font-weight:700;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wip-clean{font-size:12px;line-height:1.6}
 .stage-group-header{display:flex;justify-content:space-between;align-items:center;font-weight:650;font-size:12px;color:#c3dfdc;padding-top:4px}
-.stage-list{flex:1 1 0;min-height:60px}
+/* Chaque liste prend la hauteur de son contenu ; quand la place manque, elle garde au moins ses trois premières lignes. */
+.stage-list{flex:0 1 auto;min-height:calc(var(--rows,0) * 27px)}
 .stage-empty{font-size:11px;margin:6px}
 .commit-composer{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:9px}
 .composer-title{display:flex;align-items:center;gap:8px;font-weight:700}

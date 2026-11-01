@@ -41,6 +41,11 @@ aux grammaires TextMate de ses extensions. L'utilisateur a souvent déjà ces ex
 ## Conséquences
 
 - Une ligne pathologique est tokenisée au plus 500 ms, puis laissée sans couleur.
+- Une grammaire qui ne se charge pas (plus de 10 Mo, illisible, `onig.wasm` absent) rend ses fichiers à Monarch. Un
+  moteur absent est retenté au fichier suivant ; une grammaire en échec l'est au prochain catalogue.
+- Seule une extension qui apporte la grammaire d'un langage peut lui associer des fichiers : rust-analyzer, qui
+  déclare `rust` sans grammaire, laisse les `.rs` à Monarch.
+- Le premier diff n'attend pas le catalogue plus de 1,5 s ; un catalogue plus lent s'applique à son arrivée.
 - Après un import ou un retrait, la nouvelle coloration s'applique aux fichiers ouverts ensuite.
 - Les grammaires sont des expressions régulières écrites par des tiers ; elles ne s'exécutent que
   dans le moteur Oniguruma de la page, isolée (`sandbox`, `contextIsolation`).

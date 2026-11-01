@@ -56,5 +56,10 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   showFile: (root, path) => call('shell:show-file', { root, path }),
   openTerminal: (root) => call('shell:open-terminal', { root }),
   openRemote: (root, remote, branch = null) => call('shell:open-remote', { root, remote, branch }),
+  updateSettings: () => call('updates:settings'),
+  setUpdateSettings: (changes) => call('updates:settings:set', changes),
+  checkForUpdate: (channel) => call('updates:check', { channel }),
+  installUpdate: () => call('updates:install'),
+  onUpdateProgress: (handler) => ipcRenderer.on('updates:progress', (_event, { received, total }) => handler({ received, total })),
   remoteIcon: (root, remote) => call('shell:remote-icon', { root, remote }),
 }));

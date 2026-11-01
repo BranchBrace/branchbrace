@@ -29,6 +29,7 @@
       "dist/**/*",
       "electron/**/*",
       "src/git.js",
+      "src/updates.js",
       "scripts/apply-rebase-plan.mjs",
       "package.json"
     ],

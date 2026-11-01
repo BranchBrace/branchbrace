@@ -301,3 +301,13 @@ dialog .dialog-field+.dialog-field{margin-top:10px}
 .review-stat{display:flex;align-items:center;gap:6px;font:700 11.5px var(--mono);flex:none}
 .review-file-body{position:relative;min-height:40px}
 .review-note{padding:14px 16px;color:#81afb5;font-size:12.5px}
+
+/* Mises à jour */
+.app-menu-button.has-update{position:relative}
+.app-menu-button.has-update::after{content:"";position:absolute;top:4px;right:5px;width:7px;height:7px;border-radius:50%;background:#e2b570}
+.update-startup{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:#c3dfdc;cursor:pointer}
+.update-actions{display:flex;gap:9px;margin-top:14px}
+.update-result{margin-top:12px;padding:10px 12px;border-radius:8px;background:#101a30;color:#c3dfdc;font-size:13px;line-height:1.6}
+.update-result.ok{color:#8fd3b6}
+.update-result.available{color:#e2b570}
+.update-result.error{color:#bc5960}

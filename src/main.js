@@ -25,6 +25,8 @@ const ui = {
   root: null,
   tabs: [],
   drafts: new Map(),
+  // Incrémentée à chaque état appliqué : une réponse lancée avant reste périmée et ne l'écrase pas.
+  generation: 0,
   branch: '',
   upstream: null,
   files: [],
@@ -146,6 +148,7 @@ const ui = {
     return result;
   },
   update(status, graph, refs) {
+    this.generation += 1;
     this.files = status.files;
     this.branch = status.branch;
     this.upstream = status.upstream;
@@ -448,13 +451,16 @@ const ui = {
       ? `Dernier fetch automatique échoué : ${describeError(error)} Cliquer pour réessayer.`
       : 'Récupérer les branches des dépôts distants (git fetch --all --prune)';
   },
+  // Le dépôt est capturé avant l'attente : si l'onglet a changé entre-temps, le résultat n'est pas affiché dans l'autre.
   async fetch() {
+    const root = this.root;
     $('#fetch-button').disabled = true;
     this.message('Récupération depuis les dépôts distants…');
-    const data = await this.act(() => window.workbench.fetch(ui.root));
+    const data = await this.act(() => window.workbench.fetch(root));
     $('#fetch-button').disabled = !this.opened;
     if (!data) return;
-    autoFetch.done(ui.root);
+    autoFetch.done(root);
+    if (root !== this.root) return;
     this.setSyncError(null);
     this.update(data.status, data.graph, data.refs);
     const behind = data.refs.local.filter((ref) => ref.behind).map((ref) => `${ref.name} ↓${ref.behind}`);
@@ -584,16 +590,20 @@ const ui = {
     await this.reload();
     if (result) this.message(`${result.fastForwarded ? 'Fast-forward' : 'Merge'} de « ${label} » terminé. Récupération conservée : ${result.recoveryRef}.`);
   },
+  // Dépôt et branche capturés avant l'attente : après un changement d'onglet, rien n'est affiché ni proposé dans l'autre.
   async pull() {
-    if (!this.upstream) return;
+    const { root, branch, upstream } = this;
+    if (!upstream) return;
     $('#pull-button').disabled = true;
-    this.message(`Pull depuis ${this.upstream}…`);
-    const result = await this.act(() => window.workbench.pull(ui.root, this.upstream));
+    this.message(`Pull depuis ${upstream}…`);
+    const result = await this.act(() => window.workbench.pull(root, upstream));
+    if (root !== this.root) return;
     await this.reload();
-    if (!result) return;
+    if (!result || root !== this.root) return;
     if (result.pulled) { this.message(`Pull terminé : ${result.behind} commit(s) intégré(s) en fast-forward. Récupération conservée : ${result.recoveryRef}.`); return; }
-    if (!result.diverged) { this.message(`« ${this.branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
-    const choice = await chooseIntegration({ branch: this.branch, ...result });
+    if (!result.diverged) { this.message(`« ${branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
+    const choice = await chooseIntegration({ branch, ...result });
+    if (root !== this.root) return;
     if (choice === 'merge') await this.merge(result.upstream);
     else if (choice === 'rebase') await this.rebase(result.upstream);
   },
@@ -719,6 +729,7 @@ const autoFetch = {
     if (!root || !this.settings.autoFetch || (root === ui.root && ui.operation)) return;
     if (reason !== 'interval' && Date.now() - (this.last.get(root) || 0) < FETCH_MIN_GAP) return;
     this.last.set(root, Date.now());
+    const generation = ui.generation;
     let data;
     try { data = await window.workbench.fetch(root, true); }
     catch (error) {
@@ -730,6 +741,14 @@ const autoFetch = {
     this.errors.delete(root);
     if (root !== ui.root) return;
     ui.setSyncError(null);
+    // Un état plus récent (commit, changement d'onglet…) a été affiché pendant le fetch : son instantané, pris avant,
+    // l'écraserait. On en relit un frais, lui aussi écarté si l'état bouge encore entre-temps.
+    if (ui.generation !== generation) {
+      const seen = ui.generation;
+      const fresh = await window.workbench.refresh(root).catch(() => null);
+      if (!fresh || root !== ui.root || ui.generation !== seen) return;
+      data = fresh;
+    }
     // Rien de neuf côté distant : on ne redessine pas sous les yeux de l'utilisateur.
     if (JSON.stringify(data.refs) !== JSON.stringify(ui.refs)) ui.update(data.status, data.graph, data.refs);
   },

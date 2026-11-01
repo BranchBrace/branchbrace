@@ -51,6 +51,9 @@ function options() {
     hideUnchangedRegions: { enabled: prefs.collapse, contextLineCount: 3, minimumLineCount: 4, revealLineCount: 20 },
     wordWrap: prefs.wrap ? 'on' : 'off',
     diffWordWrap: prefs.wrap ? 'on' : 'off',
+    // Sans elle, l'éditeur de diff coupe les CodeLens de ses deux côtés, dont « Indexer ce bloc ». Passée à la
+    // création seulement, Monaco l'ignore : elle est réappliquée avec les autres options à chaque affichage.
+    diffCodeLens: true,
   };
 }
 

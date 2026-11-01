@@ -228,6 +228,11 @@ app.whenReady().then(() => {
 Un point de récupération local sera conservé.`)) return null;
     return service(root).amend(message);
   });
+  // Undo/Redo (A17) : sans confirmation, car l'état remplacé devient lui-même un point de reprise. Le service refuse
+  // d'annuler ce qui retirerait un commit déjà poussé.
+  handle('repository:undo-state', async (_event, { root }) => service(root).undoState());
+  handle('repository:undo', async (_event, { root }) => service(root).undo());
+  handle('repository:redo', async (_event, { root }) => service(root).redo());
   // Raccourcis vers le dossier du dépôt pour tester et vérifier hors de l'application.
   handle('shell:open-folder', async (_event, { root }) => { service(root); const error = await shell.openPath(root); return error === ''; });
   handle('shell:show-file', async (_event, { root, path: filePath }) => {

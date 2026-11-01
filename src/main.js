@@ -147,6 +147,7 @@ const ui = {
     this.branch = status.branch;
     this.upstream = status.upstream;
     this.operation = status.operation ?? null;
+    this.split = status.split ?? null;
     if (graph) this.graph = graph;
     if (refs) this.refs = refs;
     $('#branch-name').textContent = status.branch;
@@ -206,11 +207,14 @@ const ui = {
     const name = OPERATION_NAMES[this.operation] || this.operation;
     const text = document.createElement('div');
     text.className = 'banner-text';
-    const strong = document.createElement('strong'); strong.textContent = `${name} en cours`;
+    const strong = document.createElement('strong'); strong.textContent = this.split ? `Découpage de ${this.split.shortHash}` : `${name} en cours`;
     const detail = document.createElement('span');
+    const pending = this.files.length;
     detail.textContent = conflicts.length
       ? ` — ${conflicts.length} fichier${conflicts.length > 1 ? 's' : ''} en conflit à résoudre, puis Continuer.`
-      : ' — aucun conflit restant : vous pouvez continuer.';
+      : this.split
+        ? (pending ? ` — ${pending} fichier${pending > 1 ? 's' : ''} à recommitter en morceaux (par fichier ou par bloc), puis Continuer.` : ' — tout est recommité : Continuer rejoue la suite de la branche.')
+        : ' — aucun conflit restant : vous pouvez continuer.';
     text.append(strong, detail);
     const button = (label, className, action, title) => {
       const node = document.createElement('button'); node.className = `button compact ${className}`; node.textContent = label; node.title = title;
@@ -219,8 +223,9 @@ const ui = {
     };
     const actions = [];
     if (conflicts.length) actions.push(button('Résoudre le suivant', 'secondary', () => this.showConflict(conflicts[0].path), 'Ouvrir l’outil de fusion sur le premier fichier en conflit'));
+    if (this.split) actions.push(button('Message d’origine', 'secondary', () => this.fillCommitMessage(this.split.message), 'Reprendre le message du commit découpé dans la zone de commit'));
     actions.push(button('Continuer', 'primary', () => this.continueOperation(), `git ${this.operation} --continue`));
-    if (this.operation !== 'merge') actions.push(button('Passer ce commit', 'secondary', () => this.skipOperation(), `git ${this.operation} --skip`));
+    if (this.operation !== 'merge' && !this.split) actions.push(button('Passer ce commit', 'secondary', () => this.skipOperation(), `git ${this.operation} --skip`));
     actions.push(button('Annuler l’opération', 'danger', () => this.abortOperation(), `git ${this.operation} --abort`));
     banner.replaceChildren(text, ...actions);
     banner.hidden = false;
@@ -228,7 +233,8 @@ const ui = {
   async continueOperation() {
     const result = await this.act(() => window.workbench.continueOperation(ui.root));
     await this.reload();
-    if (result) this.message(this.operation ? `${OPERATION_NAMES[result.operation]} : nouvelle étape, de nouveaux conflits sont peut-être à résoudre.` : `${OPERATION_NAMES[result.operation]} terminé.`);
+    if (result && this.split) this.message(`Commit ${this.split.shortHash} retiré à son tour : recommittez-le en morceaux, puis Continuer.`);
+    else if (result) this.message(this.operation ? `${OPERATION_NAMES[result.operation]} : nouvelle étape, de nouveaux conflits sont peut-être à résoudre.` : `${OPERATION_NAMES[result.operation]} terminé.`);
   },
   async skipOperation() {
     const result = await this.act(() => window.workbench.skipOperation(ui.root));
@@ -492,11 +498,28 @@ const ui = {
       return node;
     };
     const actions = [];
+    // Fichier en partie indexé : on passe d'un côté à l'autre pour indexer ou désindexer ses blocs.
+    if (file?.staged && file.unstaged) {
+      const sides = document.createElement('span'); sides.className = 'segmented';
+      for (const [label, side] of [['Non indexé', false], ['Indexé', true]]) {
+        const node = button(label, side ? 'Changements indexés (HEAD → index)' : 'Changements non indexés (index → fichier)', () => side !== staged && this.showDiff(filePath, side), `chip-toggle${side === staged ? ' active' : ''}`);
+        node.setAttribute('aria-pressed', String(side === staged));
+        sides.append(node);
+      }
+      actions.push(sides);
+    }
     if (file) actions.push(button(staged ? 'Désindexer' : 'Indexer', staged ? 'Retirer ce fichier de l’index' : 'Ajouter ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
     if (file && file.worktreeStatus !== 'D') {
       actions.push(button('Éditeur', 'Ouvrir le fichier dans l’éditeur intégré', () => this.showEditor(filePath)));
       actions.push(button('Dossier', 'Afficher le fichier dans l’explorateur', () => this.invoke(() => window.workbench.showFile(ui.root, filePath))));
     }
+    // Blocs indexables : absents pour un fichier qui ne s'indexe qu'en entier (nouveau, supprimé, binaire…).
+    const list = file && !data.binary && !data.tooLarge ? await window.workbench.hunks(ui.root, filePath, staged).catch(() => null) : null;
+    const hunks = list && {
+      list, staged,
+      onToggle: (hunk) => this.toggleHunk(filePath, staged, hunk),
+      reload: () => window.workbench.hunks(ui.root, filePath, staged).catch(() => []),
+    };
     this.renderDiff(filePath, data, `${filePath} · ${staged ? 'indexé (HEAD → index)' : 'non indexé (index → fichier)'}`, actions, async (content) => {
       const status = await this.act(() => window.workbench.writeFile(ui.root, filePath, content));
       if (!status) return false;
@@ -504,12 +527,20 @@ const ui = {
       this.editor?.reloadClean(filePath);
       this.message(`${filePath} enregistré.`);
       return true;
-    });
+    }, hunks);
   },
-  async renderDiff(filePath, data, title, actions, onSave) {
+  // Indexe ou désindexe un bloc puis réaffiche le même côté tant qu'il lui reste des changements. Un bloc périmé
+  // (le fichier a changé depuis l'affichage) est refusé par le service : le diff est alors simplement réaffiché.
+  async toggleHunk(filePath, staged, hunk) {
+    await this.applyStatus(() => (staged ? window.workbench.unstageHunk : window.workbench.stageHunk)(ui.root, filePath, hunk.id));
+    const updated = this.files.find((item) => item.path === filePath);
+    if (!updated) { this.showGraph(); return; }
+    await this.showDiff(filePath, staged ? updated.staged : !updated.unstaged);
+  },
+  async renderDiff(filePath, data, title, actions, onSave, hunks = null) {
     const { showDiff } = await views();
     this.setView('diff', title);
-    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave });
+    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave, hunks });
   },
   async copy(text, label) {
     try { await navigator.clipboard.writeText(text); this.message(`${label} : ${text}.`); }
@@ -533,6 +564,24 @@ const ui = {
     const result = await this.act(() => window.workbench.rebase(ui.root, onto));
     if (result) { await this.reload(); this.message(`Rebase terminé. Récupération conservée : ${result.recoveryRef}.`); }
   },
+  fillCommitMessage(message) {
+    const [summary, ...body] = message.split('\n');
+    $('#commit-summary').value = summary;
+    $('#commit-description').value = body.join('\n').trim();
+    this.updateComposer();
+    $('#commit-summary').focus();
+  },
+  // Après un rebase arrêté sur un commit à découper : on explique la suite et on propose son message.
+  splitStarted(recoveryRef) {
+    if (!$('#commit-summary').value.trim()) this.fillCommitMessage(this.split.message);
+    this.message(`Commit ${this.split.shortHash} retiré : ses changements sont à recommitter en plusieurs morceaux, puis Continuer. Récupération conservée : ${recoveryRef}.`);
+  },
+  async splitCommit(hash) {
+    const result = await this.act(() => window.workbench.splitCommit(ui.root, hash));
+    if (!result) return;
+    await this.reload();
+    if (this.split) this.splitStarted(result.recoveryRef);
+  },
   async interactiveRebase(onto, label) {
     const data = await this.act(() => window.workbench.interactiveRebaseCommits(ui.root, onto));
     if (!data) return;
@@ -540,7 +589,10 @@ const ui = {
     const plan = await editRebasePlan({ base: label, branch: this.branch, commits: data.commits });
     if (!plan) return;
     const result = await this.act(() => window.workbench.interactiveRebase(ui.root, onto, plan));
-    if (result) { await this.reload(); this.message(`Rebase interactif terminé. Récupération conservée : ${result.recoveryRef}.`); }
+    if (!result) return;
+    await this.reload();
+    if (this.split) this.splitStarted(result.recoveryRef);
+    else this.message(`Rebase interactif terminé. Récupération conservée : ${result.recoveryRef}.`);
   },
   async push() {
     const result = await this.act(() => window.workbench.push(ui.root, this.upstream));
@@ -554,6 +606,7 @@ const ui = {
       ['Cherry-pick ce commit', () => this.cherryPick(commit.hash)],
       [`Rebaser « ${this.branch} » sur ${short}`, () => this.rebase(commit.hash)],
       [`Rebase interactif de « ${this.branch} » depuis ${short}…`, () => this.interactiveRebase(commit.hash, short)],
+      ['Découper ce commit…', () => this.splitCommit(commit.hash), commit.parents.length !== 1],
       null,
       ['Copier le SHA', () => this.copy(commit.hash, 'SHA copié')],
       ['Copier le message', () => this.copy(commit.summary ? `${commit.subject}\n\n${commit.summary}` : commit.subject, 'Message copié')],

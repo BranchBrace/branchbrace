@@ -191,10 +191,11 @@ dialog:has(.cc-types){max-width:640px}
 dialog .dialog-field+.dialog-field{margin-top:10px}
 
 /* Rebase interactif : une couleur franche par action, reprise partout (menu, ligne, aperçu) */
-.rebase-dialog{--pick:#3ddc97;--reword:#ffc247;--squash:#c084fc;--fixup:#5eb1ff;--drop:#ff5d6c;width:min(1500px,96vw);max-width:none;height:92vh;max-height:none;padding:0;overflow:visible}
+.rebase-dialog{--pick:#3ddc97;--reword:#ffc247;--split:#f97fb5;--squash:#c084fc;--fixup:#5eb1ff;--drop:#ff5d6c;width:min(1500px,96vw);max-width:none;height:92vh;max-height:none;padding:0;overflow:visible}
 .rebase-dialog[open]{display:flex;flex-direction:column}
 .action-pick{--act:var(--pick)}
 .action-reword{--act:var(--reword)}
+.action-split{--act:var(--split)}
 .action-squash{--act:var(--squash)}
 .action-fixup{--act:var(--fixup)}
 .action-drop{--act:var(--drop)}
@@ -250,6 +251,7 @@ dialog .dialog-field+.dialog-field{margin-top:10px}
 .rebase-result-subject{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .rebase-result-badge{font-size:10.5px;font-weight:800;color:#0b1220;background:var(--squash);padding:1px 7px;border-radius:8px;flex:none}
 .rebase-result-badge.reword{background:var(--reword)}
+.rebase-result-badge.split{background:var(--split)}
 .rebase-dropped{margin-top:18px}
 .rebase-dropped-row{font-size:12px;color:var(--drop);text-decoration:line-through;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rebase-dialog .dialog-error{padding:0 26px}

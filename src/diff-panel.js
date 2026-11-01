@@ -24,6 +24,26 @@ let editor = null;
 let models = [];
 let current = null;
 
+// Blocs indexables affichés en CodeLens au-dessus de chaque zone modifiée (« Indexer ce bloc »). Masqués tant que
+// le fichier est modifié sans être enregistré : leurs positions sont celles du fichier sur disque.
+let hunkLenses = null;
+const hunksChanged = new monaco.Emitter();
+const HUNK_COMMAND = 'git-workbench.toggle-hunk';
+monaco.editor.registerCommand(HUNK_COMMAND, (_accessor, hunk) => hunkLenses?.onToggle(hunk));
+monaco.languages.registerCodeLensProvider('*', {
+  onDidChange: hunksChanged.event,
+  provideCodeLenses(model) {
+    if (!hunkLenses || model !== models[1] || current?.dirty) return { lenses: [], dispose() {} };
+    const last = model.getLineCount();
+    const lenses = hunkLenses.list.map((hunk) => {
+      // Un bloc de pure suppression n'a pas de ligne côté droit : sa lentille se place sous la ligne qui le précède.
+      const line = Math.min(last, Math.max(1, hunk.newCount ? hunk.newStart : hunk.newStart + 1));
+      return { range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 }, command: { id: HUNK_COMMAND, title: hunkLenses.staged ? '− Désindexer ce bloc' : '+ Indexer ce bloc', arguments: [hunk] } };
+    });
+    return { lenses, dispose() {} };
+  },
+});
+
 function options() {
   return {
     renderSideBySide: prefs.sideBySide,
@@ -61,7 +81,8 @@ const toggle = (label, title, active, onClick) => {
 
 // `data` : { original, modified, existsBefore, existsAfter, editable } ou { binary } / { tooLarge }.
 // `actions` : boutons propres au contexte (indexer, ouvrir dans l'éditeur…) ; `onSave(texte)` si modifiable.
-export function showDiff(container, toolbar, { path, data, actions = [], onSave }) {
+// `hunks` : { list, staged, onToggle(bloc) } pour indexer ou désindexer bloc par bloc, ou null.
+export function showDiff(container, toolbar, { path, data, actions = [], onSave, hunks = null }) {
   const render = () => {
     const tools = [
       element('span', 'segmented'),
@@ -92,6 +113,7 @@ export function showDiff(container, toolbar, { path, data, actions = [], onSave 
   const previous = models;
   models = [];
   current = null;
+  hunkLenses = hunks;
   if (data.binary || data.tooLarge) {
     editor?.dispose(); editor = null;
     for (const model of previous) model.dispose();
@@ -115,13 +137,20 @@ export function showDiff(container, toolbar, { path, data, actions = [], onSave 
     async save() {
       if (!data.editable || !onSave || !this.dirty) return;
       const text = modified.getValue();
-      if (await onSave(text)) { saved = text; this.dirty = false; render(); }
+      if (!await onSave(text)) return;
+      saved = text; this.dirty = false; render();
+      // Les blocs suivent le fichier enregistré : on les recalcule, si ce diff est toujours celui affiché.
+      if (hunks?.reload && hunkLenses === hunks) {
+        const list = await hunks.reload();
+        if (hunkLenses === hunks) { hunks.list = list; hunksChanged.fire(); }
+      }
     },
   };
   modified.onDidChangeContent(() => {
     const dirty = modified.getValue() !== saved;
-    if (dirty !== current.dirty) { current.dirty = dirty; render(); }
+    if (dirty !== current.dirty) { current.dirty = dirty; render(); hunksChanged.fire(); }
   });
+  hunksChanged.fire();
   // Premier changement visible dès l'ouverture, une fois le diff calculé par le worker.
   const once = editor.onDidUpdateDiff(() => { once.dispose(); if (editor.getLineChanges()?.length) editor.goToDiff('next'); });
   render();
@@ -131,6 +160,7 @@ export const diffIsDirty = () => Boolean(current?.dirty);
 
 // Libère l'éditeur quand la vue disparaît (changement d'onglet de dépôt) ; il est recréé à la demande.
 export function disposeDiff() {
+  hunkLenses = null;
   editor?.setModel(null);
   editor?.dispose(); editor = null;
   for (const model of models) model.dispose();

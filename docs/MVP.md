@@ -18,7 +18,7 @@ Support targets to validate: Windows 10+ x64; macOS 12+ Intel/Apple Silicon; Lin
 
 - A1. Show modified, untracked, and deleted files accurately. Inspection does not modify the repository. Verify with before/after integration fixtures.
 - A2. Stage or unstage an individual file without staging unrelated changes. Verify `git diff` and `git diff --cached`.
-- A3. Staging is file-level only; partial/hunk staging is explicitly excluded from v1, so the UI must state that a selected file's full diff is staged. Verify with integration fixtures showing one selected file and unrelated files remain untouched.
+- A3. In v1, staging was file-level only and the UI stated that a selected file's full diff is staged. Verify with integration fixtures showing one selected file and unrelated files remain untouched. Hunk staging was added later (B11).
 - A4. Preview and commit only staged changes. Verify the commit tree/patch against fixtures.
 - A5. Require an explicit user action and non-empty message before committing. Verify commit object and message.
 - A6. Push only after explicit action, to the displayed upstream, never with force. Explain missing upstream and rejection. Verify with a local bare remote and ref/command inspection.
@@ -53,6 +53,8 @@ Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation a
 - B8. Commit review: every file changed by a commit, stacked with its own diff (collapsed to the changed regions), reached from the commit panel; files can be listed flat or grouped by folder.
 - B9. Interactive rebase plan editor: full-window, one colour and icon per action, rows reordered by dragging. Starting it from the validated plan needs no second confirmation; the recovery ref remains.
 - B10. Application menu in an icon left of the tabs (no native menu bar); informational messages are short toasts, confirmations stay for push, branch rewrite, abort, skip and amend of a pushed commit.
+- B11. Hunk staging: in a modified file's diff, each change block (`git diff --unified=0`) can be staged, or unstaged from the staged side, alone. A block is identified by its content, so a block that changed since it was displayed is refused, never applied elsewhere. Patches are applied byte for byte (`git apply --cached`), keeping line endings and encodings. New, deleted, renamed, binary and conflicted files remain whole-file only. Unrelated blocks and the working tree are untouched.
+- B12. Commit split: from the graph ("Découper ce commit…") or as a "split" action in the interactive rebase editor. After a confirmation, the rebase stops on the commit (`edit`) and removes it alone (`reset HEAD~1`), so its changes return unstaged to the working tree. They are recommitted in pieces (by file or by block, with the original message offered), then "Continue" replays the rest of the branch. The working tree must be clean to start; root and merge commits, commits outside the current branch and ranges containing merges are refused; a recovery ref is kept and abort returns to the state before.
 
 ## Architecture and delivery decisions
 

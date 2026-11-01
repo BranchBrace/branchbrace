@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -10,7 +10,7 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 const MAX_EDITABLE = 5 * 1024 * 1024;
 // Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
-const REBASE_ACTIONS = ['pick', 'reword', 'squash', 'fixup', 'drop'];
+const REBASE_ACTIONS = ['pick', 'reword', 'split', 'squash', 'fixup', 'drop'];
 
 // Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
 // Héritées de l'environnement du processus hôte, elles peuvent détourner une
@@ -85,7 +85,8 @@ function runGit(cwd, args, options = {}) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      // `encoding: 'latin1'` garde chaque octet tel quel : un patch relu puis réappliqué n'abîme aucun encodage.
+      const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
     });
@@ -183,6 +184,30 @@ export function remoteWebUrl(url) {
   return { host, path: pathname, provider, web: `https://${host}/${pathname}` };
 }
 
+// Blocs (hunks) d'un diff produit avec `--unified=0` : un bloc par zone modifiée, sans contexte, pour indexer ou
+// désindexer exactement ce que l'on voit. L'identifiant résume le contenu du bloc : un bloc qui a changé depuis
+// l'affichage n'est plus reconnu et l'action est refusée plutôt qu'appliquée à côté.
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+export function parseHunks(diff) {
+  const lines = diff.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const first = lines.findIndex((line) => HUNK_HEADER.test(line));
+  if (first < 0) return { header: lines, hunks: [] };
+  const hunks = [];
+  for (const line of lines.slice(first)) {
+    const match = HUNK_HEADER.exec(line);
+    if (match) hunks.push({ oldStart: Number(match[1]), oldCount: match[2] === undefined ? 1 : Number(match[2]), newStart: Number(match[3]), newCount: match[4] === undefined ? 1 : Number(match[4]), lines: [line] });
+    else hunks.at(-1).lines.push(line);
+  }
+  for (const hunk of hunks) hunk.id = createHash('sha256').update(hunk.lines.join('\n')).digest('hex').slice(0, 16);
+  return { header: lines.slice(0, first), hunks };
+}
+
+// Patch d'un seul bloc. Les lignes de mode sont retirées : indexer un bloc n'indexe que du contenu.
+export function hunkPatch(header, hunk) {
+  return `${[...header.filter((line) => !/^(old|new) mode /.test(line)), ...hunk.lines].join('\n')}\n`;
+}
+
 // Contenu lu par Git ou sur disque : un octet nul signale un fichier binaire, qu'on ne montre pas comme du texte.
 const isBinary = (text) => typeof text === 'string' && text.slice(0, 8000).includes('\0');
 
@@ -211,7 +236,7 @@ export class GitService {
       runGit(this.repositoryPath, ['status', '--porcelain=v1', '--branch', '-z', '--untracked-files=all']),
       this.operation(),
     ]);
-    return { ...parseStatus(raw), operation };
+    return { ...parseStatus(raw), operation, split: operation === 'rebase' ? await this.#splitState() : null };
   }
 
   // Opération Git interrompue (en général par un conflit) qu'il reste à continuer ou annuler.
@@ -318,6 +343,42 @@ export class GitService {
   async unstage(filePath) {
     await this.#statusEntry(filePath);
     await runGit(this.repositoryPath, ['reset', '--', filePath]);
+    return this.status();
+  }
+
+  // Blocs indexables d'un fichier (non indexé : index → fichier ; indexé : HEAD → index). `null` quand seul le
+  // fichier entier a un sens : fichier nouveau, supprimé, renommé, binaire ou en conflit.
+  async hunks(filePath, staged = false) {
+    const diff = await this.#hunkDiff(filePath, staged);
+    return diff && diff.hunks.map(({ id, oldStart, oldCount, newStart, newCount }) => ({ id, oldStart, oldCount, newStart, newCount }));
+  }
+
+  async stageHunk(filePath, hunkId) { return this.#applyHunk(filePath, hunkId, false); }
+
+  async unstageHunk(filePath, hunkId) { return this.#applyHunk(filePath, hunkId, true); }
+
+  async #hunkDiff(filePath, staged) {
+    const entry = await this.#statusEntry(filePath);
+    if (entry.untracked || entry.conflicted || (staged && entry.originalPath)) return null;
+    // Préfixes explicites : diff.noprefix ou diff.mnemonicPrefix rendraient le patch inapplicable.
+    const args = ['diff', '--no-ext-diff', '--no-color', '--no-renames', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/'];
+    if (staged) args.push('--cached');
+    const diff = parseHunks(await runGit(this.repositoryPath, [...args, '--', filePath], { encoding: 'latin1' }));
+    if (diff.header.some((line) => /^(new file mode|deleted file mode|Binary files|GIT binary patch)/.test(line))) return null;
+    return diff;
+  }
+
+  async #applyHunk(filePath, hunkId, staged) {
+    if (typeof hunkId !== 'string') throw new GitWorkbenchError('hunk-outdated');
+    const diff = await this.#hunkDiff(filePath, staged);
+    if (!diff) throw new GitWorkbenchError('hunk-unsupported');
+    const hunk = diff.hunks.find((item) => item.id === hunkId);
+    if (!hunk) throw new GitWorkbenchError('hunk-outdated');
+    // Le patch passe par un fichier du dossier .git : runGit ne fournit pas d'entrée standard.
+    const patchPath = path.join(await this.#gitDirectory(), `git-workbench-hunk-${randomUUID()}.patch`);
+    await writeFile(patchPath, Buffer.from(hunkPatch(diff.header, hunk), 'latin1'), { mode: 0o600 });
+    try { await runGit(this.repositoryPath, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', ...(staged ? ['--reverse'] : []), patchPath]); }
+    finally { await rm(patchPath, { force: true }); }
     return this.status();
   }
 
@@ -545,10 +606,14 @@ export class GitService {
   // par Git (celui du commit rejoué) au lieu d'ouvrir un éditeur que personne ne verrait.
   async continueOperation() {
     const operation = await this.#pendingOperation();
-    if ((await this.status()).files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    const status = await this.status();
+    if (status.files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    // Pendant un découpage, Git refuserait de continuer avec des changements non commités : on l'explique avant.
+    if (status.split && status.files.length) throw new GitWorkbenchError('split-changes-remaining');
     try { await runGit(this.repositoryPath, [operation, '--continue'], { env: await this.#operationEditors(operation) }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { operation, status: await this.status() };
   }
 
@@ -559,6 +624,7 @@ export class GitService {
     try { await runGit(this.repositoryPath, [operation, '--skip'], { env: await this.#operationEditors(operation) }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { operation, status: await this.status() };
   }
 
@@ -631,7 +697,52 @@ export class GitService {
     try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { ...await this.#rebaseEditors(), GIT_SEQUENCE_EDITOR: this.#rebaseEditorCommand() } }); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
     finally { await this.#cleanupRebasePlan(); }
+    await this.#prepareSplitStop();
     return { recoveryRef, status: await this.status() };
+  }
+
+  // Découpe un commit de la branche courante : rebase interactif qui s'arrête sur lui (les commits suivants restent
+  // « gardés »), puis retrait de ce seul commit pour que ses changements reviennent, non indexés, dans l'arbre de
+  // travail. On les recommitte en plusieurs morceaux, puis « Continuer » rejoue la suite de la branche.
+  async splitCommit(revision) {
+    await this.#ensureRepositoryPath();
+    const hash = await this.#resolveCommit(revision);
+    const parents = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
+    // Un commit racine n'a pas de parent sur lequel s'arrêter, un merge ne se découpe pas en morceaux de diff.
+    if (parents.length !== 1) throw new GitWorkbenchError('split-unsupported');
+    try { await runGit(this.repositoryPath, ['merge-base', '--is-ancestor', hash, 'HEAD']); }
+    catch { throw new GitWorkbenchError('split-not-on-branch'); }
+    // Le rebase aplatirait les merges qui suivent le commit : on refuse plutôt que de réécrire plus que demandé.
+    if (Number((await runGit(this.repositoryPath, ['rev-list', '--merges', '--count', `${parents[0]}..HEAD`])).trim())) throw new GitWorkbenchError('split-unsupported');
+    const { commits } = await this.interactiveRebaseCommits(parents[0]);
+    return this.interactiveRebase(parents[0], commits.map((commit) => ({ hash: commit.hash, action: commit.hash === hash ? 'split' : 'pick' })));
+  }
+
+  // Commit en cours de découpage : rebase arrêté (« edit ») sur un commit que le plan marque « split ».
+  // `ready` : ce commit a déjà été retiré, ses changements attendent dans l'arbre de travail.
+  async #splitState() {
+    const planPath = await this.#rebasePlanPath();
+    if (!existsSync(planPath)) return null;
+    const directory = path.join(await this.#gitDirectory(), 'rebase-merge');
+    const [plan, done, amend] = await Promise.all([
+      readFile(planPath, 'utf8').then(JSON.parse).catch(() => []),
+      readFile(path.join(directory, 'done'), 'utf8').catch(() => ''),
+      readFile(path.join(directory, 'amend'), 'utf8').catch(() => null),
+    ]);
+    // Dernière ligne de `done` : l'étape sur laquelle le rebase est arrêté.
+    const current = /^(?:edit|e)\s+([0-9a-f]+)/.exec(done.trim().split('\n').at(-1)?.trim() || '');
+    const item = current && plan.find((step) => step.action === 'split' && step.hash.startsWith(current[1]));
+    if (!item || amend === null) return null;
+    const head = await runGit(this.repositoryPath, ['rev-parse', 'HEAD']).then((value) => value.trim(), () => null);
+    const record = await runGit(this.repositoryPath, ['show', '-s', '--format=%h%x00%B', item.hash]);
+    const [shortHash, ...message] = record.split('\0');
+    return { hash: item.hash, shortHash, message: message.join('\0').trimEnd(), ready: head !== amend.trim() };
+  }
+
+  async #prepareSplitStop() {
+    if (await this.operation() !== 'rebase') return;
+    const split = await this.#splitState();
+    if (split && !split.ready) await runGit(this.repositoryPath, ['reset', '--quiet', 'HEAD~1']);
   }
 
   async #rebasePlanPath() { return path.join(await this.#gitDirectory(), 'git-workbench-rebase-plan.json'); }

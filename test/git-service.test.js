@@ -307,3 +307,80 @@ test('an inherited GIT_DIR/GIT_WORK_TREE does not redirect operations to another
     if (savedWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedWorkTree;
   }
 });
+
+test('a single hunk is staged and unstaged without touching the other hunks', async (t) => {
+  const { repo, service } = await fixture(t);
+  const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+  await writeFile(path.join(repo, 'base.txt'), `${lines.join('\n')}\n`);
+  git(repo, 'commit', '--quiet', '-am', 'twenty lines');
+  const edited = [...lines]; edited[1] = 'changed 2'; edited[17] = 'changed 18';
+  await writeFile(path.join(repo, 'base.txt'), `${edited.join('\n')}\n`);
+  const hunks = await service.hunks('base.txt');
+  assert.equal(hunks.length, 2);
+  await service.stageHunk('base.txt', hunks[1].id);
+  const staged = git(repo, 'diff', '--cached', '-U0');
+  assert.match(staged, /\+changed 18/);
+  assert.doesNotMatch(staged, /changed 2\b/);
+  assert.match(git(repo, 'diff', '-U0'), /\+changed 2\b/);
+  assert.equal((await readFile(path.join(repo, 'base.txt'), 'utf8')), `${edited.join('\n')}\n`);
+  const [stagedHunk] = await service.hunks('base.txt', true);
+  await service.unstageHunk('base.txt', stagedHunk.id);
+  assert.equal(git(repo, 'diff', '--cached'), '');
+  await assert.rejects(service.stageHunk('base.txt', 'outdated'), (error) => error instanceof GitWorkbenchError && error.code === 'hunk-outdated');
+});
+
+test('hunk staging keeps CRLF and non-UTF-8 bytes intact', async (t) => {
+  const { repo, service } = await fixture(t);
+  git(repo, 'config', 'core.autocrlf', 'false');
+  const content = Buffer.from('caf\xe9\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\n', 'latin1');
+  await writeFile(path.join(repo, 'latin.txt'), content);
+  git(repo, 'add', 'latin.txt'); git(repo, 'commit', '--quiet', '-m', 'latin');
+  await writeFile(path.join(repo, 'latin.txt'), Buffer.from('caf\xe9 cr\xe8me\r\nb\r\nc\r\nd\r\ne\r\nf\r\nG\r\n', 'latin1'));
+  const hunks = await service.hunks('latin.txt');
+  await service.stageHunk('latin.txt', hunks[0].id);
+  const indexed = spawnSync('git', ['cat-file', 'blob', ':latin.txt'], { cwd: repo }).stdout;
+  assert.deepEqual(indexed, Buffer.from('caf\xe9 cr\xe8me\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\n', 'latin1'));
+});
+
+test('new and untracked files only offer whole-file staging', async (t) => {
+  const { repo, service } = await fixture(t);
+  await writeFile(path.join(repo, 'new.txt'), 'new\n');
+  assert.equal(await service.hunks('new.txt'), null);
+  await assert.rejects(service.stageHunk('new.txt', 'x'), (error) => error.code === 'hunk-unsupported');
+});
+
+test('splitting a commit replays it as several commits and keeps the rest of the branch', async (t) => {
+  const { repo, service } = await fixture(t);
+  await writeFile(path.join(repo, 'a.txt'), 'a\n');
+  await writeFile(path.join(repo, 'b.txt'), 'b\n');
+  git(repo, 'add', '.'); git(repo, 'commit', '--quiet', '-m', 'a and b');
+  const target = git(repo, 'rev-parse', 'HEAD');
+  await writeFile(path.join(repo, 'c.txt'), 'c\n');
+  git(repo, 'add', 'c.txt'); git(repo, 'commit', '--quiet', '-m', 'c');
+  const result = await service.splitCommit(target);
+  assert.match(result.recoveryRef, /^refs\/git-workbench\/recovery\/interactive-rebase-/);
+  assert.equal(result.status.operation, 'rebase');
+  assert.equal(result.status.split.hash, target);
+  assert.equal(result.status.split.message, 'a and b');
+  assert.equal(result.status.split.ready, true);
+  assert.deepEqual(result.status.files.map((file) => file.path).sort(), ['a.txt', 'b.txt']);
+  await assert.rejects(service.continueOperation(), (error) => error.code === 'split-changes-remaining');
+  await service.stage('a.txt'); await service.commit('a');
+  await service.stage('b.txt'); await service.commit('b');
+  const done = await service.continueOperation();
+  assert.equal(done.status.operation, null);
+  assert.equal(git(repo, 'log', '--format=%s').split('\n').join(','), 'c,b,a,initial');
+  assert.equal((await service.status()).files.length, 0);
+});
+
+test('splitting refuses root commits and commits outside the current branch', async (t) => {
+  const { repo, service } = await fixture(t);
+  const root = git(repo, 'rev-parse', 'HEAD');
+  await assert.rejects(service.splitCommit(root), (error) => error.code === 'split-unsupported');
+  git(repo, 'checkout', '--quiet', '-b', 'other');
+  await writeFile(path.join(repo, 'o.txt'), 'o\n');
+  git(repo, 'add', 'o.txt'); git(repo, 'commit', '--quiet', '-m', 'other');
+  const other = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'checkout', '--quiet', 'main');
+  await assert.rejects(service.splitCommit(other), (error) => error.code === 'split-not-on-branch');
+});

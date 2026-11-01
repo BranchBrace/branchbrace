@@ -1,4 +1,4 @@
-# ADR 0006 — Coloration par les grammaires TextMate des extensions VS Code
+# ADR 0007 — Coloration par les grammaires TextMate des extensions VS Code
 
 - Statut : accepté
 - Date : 2026-11-01

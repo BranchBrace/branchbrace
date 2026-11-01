@@ -144,6 +144,7 @@
 .ref-pill.behind{color:#9fd0ff;background:#13304d}
 .ref-pill.tracked{color:#ffc58a;background:#2a2418}
 .ref-pill.remote-only{color:#9fd0ff;background:#13304d;outline:1px dashed #5eb1ff88;outline-offset:-1px}
+.ref-pill.worktree{color:#d8b8ff;background:#2a1f3d}
 .remote-group{display:flex;align-items:center;gap:6px;padding:6px 10px 4px 22px;font-size:11px;color:#9cc4c6}
 .remote-logo{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none;color:#e3f5f1}
 .remote-logo svg,.remote-logo img{width:100%;height:100%;display:block}

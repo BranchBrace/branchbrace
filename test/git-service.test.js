@@ -308,47 +308,6 @@ test('an inherited GIT_DIR/GIT_WORK_TREE does not redirect operations to another
   }
 });
 
-test('a single hunk is staged and unstaged without touching the other hunks', async (t) => {
-  const { repo, service } = await fixture(t);
-  const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
-  await writeFile(path.join(repo, 'base.txt'), `${lines.join('\n')}\n`);
-  git(repo, 'commit', '--quiet', '-am', 'twenty lines');
-  const edited = [...lines]; edited[1] = 'changed 2'; edited[17] = 'changed 18';
-  await writeFile(path.join(repo, 'base.txt'), `${edited.join('\n')}\n`);
-  const hunks = await service.hunks('base.txt');
-  assert.equal(hunks.length, 2);
-  await service.stageHunk('base.txt', hunks[1].id);
-  const staged = git(repo, 'diff', '--cached', '-U0');
-  assert.match(staged, /\+changed 18/);
-  assert.doesNotMatch(staged, /changed 2\b/);
-  assert.match(git(repo, 'diff', '-U0'), /\+changed 2\b/);
-  assert.equal((await readFile(path.join(repo, 'base.txt'), 'utf8')), `${edited.join('\n')}\n`);
-  const [stagedHunk] = await service.hunks('base.txt', true);
-  await service.unstageHunk('base.txt', stagedHunk.id);
-  assert.equal(git(repo, 'diff', '--cached'), '');
-  await assert.rejects(service.stageHunk('base.txt', 'outdated'), (error) => error instanceof GitWorkbenchError && error.code === 'hunk-outdated');
-});
-
-test('hunk staging keeps CRLF and non-UTF-8 bytes intact', async (t) => {
-  const { repo, service } = await fixture(t);
-  git(repo, 'config', 'core.autocrlf', 'false');
-  const content = Buffer.from('caf\xe9\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\n', 'latin1');
-  await writeFile(path.join(repo, 'latin.txt'), content);
-  git(repo, 'add', 'latin.txt'); git(repo, 'commit', '--quiet', '-m', 'latin');
-  await writeFile(path.join(repo, 'latin.txt'), Buffer.from('caf\xe9 cr\xe8me\r\nb\r\nc\r\nd\r\ne\r\nf\r\nG\r\n', 'latin1'));
-  const hunks = await service.hunks('latin.txt');
-  await service.stageHunk('latin.txt', hunks[0].id);
-  const indexed = spawnSync('git', ['cat-file', 'blob', ':latin.txt'], { cwd: repo }).stdout;
-  assert.deepEqual(indexed, Buffer.from('caf\xe9 cr\xe8me\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\n', 'latin1'));
-});
-
-test('new and untracked files only offer whole-file staging', async (t) => {
-  const { repo, service } = await fixture(t);
-  await writeFile(path.join(repo, 'new.txt'), 'new\n');
-  assert.equal(await service.hunks('new.txt'), null);
-  await assert.rejects(service.stageHunk('new.txt', 'x'), (error) => error.code === 'hunk-unsupported');
-});
-
 test('splitting a commit replays it as several commits and keeps the rest of the branch', async (t) => {
   const { repo, service } = await fixture(t);
   await writeFile(path.join(repo, 'a.txt'), 'a\n');

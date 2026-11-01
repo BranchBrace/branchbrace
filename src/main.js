@@ -216,7 +216,7 @@ const ui = {
     detail.textContent = conflicts.length
       ? ` — ${conflicts.length} fichier${conflicts.length > 1 ? 's' : ''} en conflit à résoudre, puis Continuer.`
       : this.split
-        ? (pending ? ` — ${pending} fichier${pending > 1 ? 's' : ''} à recommitter en morceaux (par fichier ou par bloc), puis Continuer.` : ' — tout est recommité : Continuer rejoue la suite de la branche.')
+        ? (pending ? ` — ${pending} fichier${pending > 1 ? 's' : ''} à recommitter en morceaux (par fichier, par bloc ou par ligne), puis Continuer.` : ' — tout est recommité : Continuer rejoue la suite de la branche.')
         : ' — aucun conflit restant : vous pouvez continuer.';
     text.append(strong, detail);
     const button = (label, className, action, title) => {
@@ -501,28 +501,11 @@ const ui = {
       return node;
     };
     const actions = [];
-    // Fichier en partie indexé : on passe d'un côté à l'autre pour indexer ou désindexer ses blocs.
-    if (file?.staged && file.unstaged) {
-      const sides = document.createElement('span'); sides.className = 'segmented';
-      for (const [label, side] of [['Non indexé', false], ['Indexé', true]]) {
-        const node = button(label, side ? 'Changements indexés (HEAD → index)' : 'Changements non indexés (index → fichier)', () => side !== staged && this.showDiff(filePath, side), `chip-toggle${side === staged ? ' active' : ''}`);
-        node.setAttribute('aria-pressed', String(side === staged));
-        sides.append(node);
-      }
-      actions.push(sides);
-    }
     if (file) actions.push(button(staged ? 'Désindexer' : 'Indexer', staged ? 'Retirer ce fichier de l’index' : 'Ajouter ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
     if (file && file.worktreeStatus !== 'D') {
       actions.push(button('Éditeur', 'Ouvrir le fichier dans l’éditeur intégré', () => this.showEditor(filePath)));
       actions.push(button('Dossier', 'Afficher le fichier dans l’explorateur', () => this.invoke(() => window.workbench.showFile(ui.root, filePath))));
     }
-    // Blocs indexables : absents pour un fichier qui ne s'indexe qu'en entier (nouveau, supprimé, binaire…).
-    const list = file && !data.binary && !data.tooLarge ? await window.workbench.hunks(ui.root, filePath, staged).catch(() => null) : null;
-    const hunks = list && {
-      list, staged,
-      onToggle: (hunk) => this.toggleHunk(filePath, staged, hunk),
-      reload: () => window.workbench.hunks(ui.root, filePath, staged).catch(() => []),
-    };
     this.renderDiff(filePath, data, `${filePath} · ${staged ? 'indexé (HEAD → index)' : 'non indexé (index → fichier)'}`, actions, async (content) => {
       const status = await this.act(() => window.workbench.writeFile(ui.root, filePath, content));
       if (!status) return false;
@@ -530,20 +513,12 @@ const ui = {
       this.editor?.reloadClean(filePath);
       this.message(`${filePath} enregistré.`);
       return true;
-    }, hunks);
+    });
   },
-  // Indexe ou désindexe un bloc puis réaffiche le même côté tant qu'il lui reste des changements. Un bloc périmé
-  // (le fichier a changé depuis l'affichage) est refusé par le service : le diff est alors simplement réaffiché.
-  async toggleHunk(filePath, staged, hunk) {
-    await this.applyStatus(() => (staged ? window.workbench.unstageHunk : window.workbench.stageHunk)(ui.root, filePath, hunk.id));
-    const updated = this.files.find((item) => item.path === filePath);
-    if (!updated) { this.showGraph(); return; }
-    await this.showDiff(filePath, staged ? updated.staged : !updated.unstaged);
-  },
-  async renderDiff(filePath, data, title, actions, onSave, hunks = null) {
+  async renderDiff(filePath, data, title, actions, onSave) {
     const { showDiff } = await views();
     this.setView('diff', title);
-    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave, hunks });
+    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave });
   },
   async copy(text, label) {
     try { await navigator.clipboard.writeText(text); this.message(`${label} : ${text}.`); }

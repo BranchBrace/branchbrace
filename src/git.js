@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -85,8 +85,7 @@ function runGit(cwd, args, options = {}) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      // `encoding: 'latin1'` garde chaque octet tel quel : un patch relu puis réappliqué n'abîme aucun encodage.
-      const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
     });
@@ -182,30 +181,6 @@ export function remoteWebUrl(url) {
   if (!host || !pathname || !/^[a-z0-9.-]+$/i.test(host)) return null;
   const provider = /(^|\.)github\.com$/i.test(host) ? 'github' : /gitlab/i.test(host) ? 'gitlab' : /bitbucket/i.test(host) ? 'bitbucket' : 'git';
   return { host, path: pathname, provider, web: `https://${host}/${pathname}` };
-}
-
-// Blocs (hunks) d'un diff produit avec `--unified=0` : un bloc par zone modifiée, sans contexte, pour indexer ou
-// désindexer exactement ce que l'on voit. L'identifiant résume le contenu du bloc : un bloc qui a changé depuis
-// l'affichage n'est plus reconnu et l'action est refusée plutôt qu'appliquée à côté.
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-export function parseHunks(diff) {
-  const lines = diff.split('\n');
-  if (lines.at(-1) === '') lines.pop();
-  const first = lines.findIndex((line) => HUNK_HEADER.test(line));
-  if (first < 0) return { header: lines, hunks: [] };
-  const hunks = [];
-  for (const line of lines.slice(first)) {
-    const match = HUNK_HEADER.exec(line);
-    if (match) hunks.push({ oldStart: Number(match[1]), oldCount: match[2] === undefined ? 1 : Number(match[2]), newStart: Number(match[3]), newCount: match[4] === undefined ? 1 : Number(match[4]), lines: [line] });
-    else hunks.at(-1).lines.push(line);
-  }
-  for (const hunk of hunks) hunk.id = createHash('sha256').update(hunk.lines.join('\n')).digest('hex').slice(0, 16);
-  return { header: lines.slice(0, first), hunks };
-}
-
-// Patch d'un seul bloc. Les lignes de mode sont retirées : indexer un bloc n'indexe que du contenu.
-export function hunkPatch(header, hunk) {
-  return `${[...header.filter((line) => !/^(old|new) mode /.test(line)), ...hunk.lines].join('\n')}\n`;
 }
 
 // Contenu lu par Git ou sur disque : un octet nul signale un fichier binaire, qu'on ne montre pas comme du texte.
@@ -343,56 +318,6 @@ export class GitService {
   async unstage(filePath) {
     await this.#statusEntry(filePath);
     await runGit(this.repositoryPath, ['reset', '--', filePath]);
-    return this.status();
-  }
-
-  // Blocs indexables d'un fichier (non indexé : index → fichier ; indexé : HEAD → index). `null` quand seul le
-  // fichier entier a un sens : fichier nouveau, supprimé, renommé, binaire ou en conflit.
-  async hunks(filePath, staged = false) {
-    const diff = await this.#hunkDiff(filePath, staged);
-    return diff && diff.hunks.map(({ id, oldStart, oldCount, newStart, newCount }) => ({ id, oldStart, oldCount, newStart, newCount }));
-  }
-
-  async stageHunk(filePath, hunkId) { return this.#applyHunk(filePath, hunkId, false); }
-
-  async unstageHunk(filePath, hunkId) { return this.#applyHunk(filePath, hunkId, true); }
-
-  async #hunkDiff(filePath, staged) {
-    const entry = await this.#statusEntry(filePath);
-    if (entry.untracked || entry.conflicted || (staged && entry.originalPath)) return null;
-    // Préfixes explicites : diff.noprefix ou diff.mnemonicPrefix rendraient le patch inapplicable.
-    const args = ['diff', '--no-ext-diff', '--no-color', '--no-renames', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/'];
-    if (staged) args.push('--cached');
-    const diff = parseHunks(await runGit(this.repositoryPath, [...args, '--', filePath], { encoding: 'latin1' }));
-    if (diff.header.some((line) => /^(new file mode|deleted file mode|Binary files|GIT binary patch)/.test(line))) return null;
-    return diff;
-  }
-
-  async #applyHunk(filePath, hunkId, staged) {
-    if (typeof hunkId !== 'string') throw new GitWorkbenchError('hunk-outdated');
-    const diff = await this.#hunkDiff(filePath, staged);
-    if (!diff) throw new GitWorkbenchError('hunk-unsupported');
-    const hunk = diff.hunks.find((item) => item.id === hunkId);
-    if (!hunk) throw new GitWorkbenchError('hunk-outdated');
-    // Le patch passe par un fichier du dossier .git : runGit ne fournit pas d'entrée standard.
-    const patchPath = path.join(await this.#gitDirectory(), `git-workbench-hunk-${randomUUID()}.patch`);
-    await writeFile(patchPath, Buffer.from(hunkPatch(diff.header, hunk), 'latin1'), { mode: 0o600 });
-    // Entrée d'index d'avant (« mode oid étape\tchemin ») : de quoi revenir en arrière si le résultat n'est pas le bon.
-    const [mode, oid] = (await runGit(this.repositoryPath, ['ls-files', '--stage', '--', filePath])).split(/\s+/);
-    try { await runGit(this.repositoryPath, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', ...(staged ? ['--reverse'] : []), patchPath]); }
-    finally { await rm(patchPath, { force: true }); }
-    // Relecture : du côté traité, seul ce bloc doit avoir disparu (les numéros de ligne des autres peuvent bouger).
-    const body = (item) => item.lines.slice(1).join('\n');
-    const expected = diff.hunks.filter((item) => item !== hunk).map(body).sort();
-    const after = await this.#hunkDiff(filePath, staged).catch((error) => {
-      if (error.code === 'file-not-in-status') return { hunks: [] };
-      throw error;
-    });
-    const actual = (after?.hunks ?? []).map(body).sort();
-    if (actual.length !== expected.length || actual.some((text, index) => text !== expected[index])) {
-      await runGit(this.repositoryPath, ['update-index', '--cacheinfo', `${mode},${oid},${filePath}`]);
-      throw new GitWorkbenchError('hunk-verification-failed');
-    }
     return this.status();
   }
 

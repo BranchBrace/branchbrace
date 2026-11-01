@@ -260,9 +260,6 @@ Un point de récupération local sera conservé.`)) return null;
   // Seuls le push (transmission hors de la machine) et les rebases (réécriture de l'historique) en demandent une.
   handle('repository:stage', async (_event, { root, path: filePath }) => service(root).stage(filePath));
   handle('repository:unstage', async (_event, { root, path: filePath }) => service(root).unstage(filePath));
-  handle('repository:hunks', async (_event, { root, path: filePath, staged }) => service(root).hunks(filePath, staged === true));
-  handle('repository:hunk:stage', async (_event, { root, path: filePath, id }) => service(root).stageHunk(filePath, id));
-  handle('repository:hunk:unstage', async (_event, { root, path: filePath, id }) => service(root).unstageHunk(filePath, id));
   handle('repository:stage-all', async (_event, { root }) => service(root).stageAll());
   handle('repository:unstage-all', async (_event, { root }) => service(root).unstageAll());
   handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));
@@ -315,7 +312,7 @@ Un point de récupération local sera conservé.`)) return null;
     const target = service(root);
     await target.assertClean();
     const commit = await target.previewCommit(hash);
-    if (!await confirm('Découper ce commit ?', `« ${commit.subject} » (${commit.shortHash}) va être retiré de la branche et ses changements remis dans l’arbre de travail. Committez-les en plusieurs morceaux (par fichier ou par bloc), puis « Continuer » rejoue les commits suivants.
+    if (!await confirm('Découper ce commit ?', `« ${commit.subject} » (${commit.shortHash}) va être retiré de la branche et ses changements remis dans l’arbre de travail. Committez-les en plusieurs morceaux (par fichier, par bloc ou par ligne), puis « Continuer » rejoue les commits suivants.
 
 Un point de récupération local sera conservé ; « Annuler » revient à l’état d’avant. Si ce commit est déjà poussé, la branche divergera de sa distante (l’application ne force jamais un push).`)) return null;
     return target.splitCommit(commit.hash);

@@ -135,11 +135,15 @@ export function buildCatalog(extensions) {
       languages[grammar.language] = language;
     }
   }
+  // Une extension installée ou importée qui déclare un langage sans en fournir la grammaire (rust-analyzer pour `.rs`)
+  // ne doit pas faire passer ses fichiers sur la grammaire intégrée à VS Code avant Monarch : son association
+  // fichier → langage ne compte que si la grammaire du langage vient de la même provenance.
+  const kept = claims.filter((claim) => claim.source === 'builtin' || languages[claim.language]?.source === claim.source);
   return {
     extensions: ordered.map(({ id, name, version, source, languages: contributed }) => ({ id, name, version, source, languages: contributed.map((language) => language.id) })),
     grammars,
     languages,
-    claims,
+    claims: kept,
   };
 }
 

@@ -159,6 +159,9 @@ export async function importVsix(file, root) {
   if (!extension.grammars.some((grammar) => zip.has(`extension/${grammar.path}`))) throw new GitWorkbenchError('extension-no-grammar');
   await mkdir(root, { recursive: true });
   const staging = path.join(root, `.import-${randomUUID()}`);
+  // Les versions déjà importées sont mises de côté (dossiers en `.`, ignorés des lectures), pas supprimées : si la
+  // nouvelle ne peut pas prendre leur place (rename refusé sous Windows…), elles sont restaurées.
+  const aside = [];
   try {
     for (const relative of wanted) {
       const name = `extension/${relativePath(relative)}`;
@@ -167,28 +170,39 @@ export async function importVsix(file, root) {
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, zip.read(name));
     }
-    await removeImported(root, extension.id).catch(() => {});
+    for (const folder of await importedFolders(root, extension.id)) {
+      const parked = path.join(root, `.replaced-${randomUUID()}`);
+      await rename(folder, parked);
+      aside.push({ folder, parked });
+    }
     await rename(staging, path.join(root, `${safeName(extension.id)}-${safeName(extension.version)}`));
   } catch (error) {
+    for (const { folder, parked } of aside.reverse()) await rename(parked, folder).catch(() => {});
     await rm(staging, { recursive: true, force: true });
     throw error instanceof GitWorkbenchError ? error : new GitWorkbenchError('extension-invalid');
   }
+  for (const { parked } of aside) await rm(parked, { recursive: true, force: true }).catch(() => {});
   return { id: extension.id, name: extension.name, version: extension.version };
 }
 
-// Retire une extension importée (toutes ses versions) ; les extensions de VS Code ne sont jamais touchées.
-export async function removeImported(root, id) {
-  let removed = false;
+// Dossiers des versions importées d'une extension.
+async function importedFolders(root, id) {
+  const folders = [];
   let entries = [];
   try { entries = await readdir(root, { withFileTypes: true }); } catch { /* aucun import */ }
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const folder = path.join(root, entry.name);
     try {
-      if (readManifest(JSON.parse(await readFile(path.join(folder, 'package.json'), 'utf8')), 'imported')?.id !== id) continue;
-    } catch { continue; }
-    await rm(folder, { recursive: true, force: true });
-    removed = true;
+      if (readManifest(JSON.parse(await readFile(path.join(folder, 'package.json'), 'utf8')), 'imported')?.id === id) folders.push(folder);
+    } catch { /* dossier sans manifeste lisible */ }
   }
-  if (!removed) throw new GitWorkbenchError('extension-not-found');
+  return folders;
+}
+
+// Retire une extension importée (toutes ses versions) ; les extensions de VS Code ne sont jamais touchées.
+export async function removeImported(root, id) {
+  const folders = await importedFolders(root, id);
+  if (!folders.length) throw new GitWorkbenchError('extension-not-found');
+  for (const folder of folders) await rm(folder, { recursive: true, force: true });
 }

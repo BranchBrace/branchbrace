@@ -6,7 +6,8 @@ const MESSAGES = {
   conflict: 'Conflit : Git s’est arrêté au milieu de l’opération. Résolvez les fichiers en conflit puis continuez, ou annulez l’opération.',
   'nothing-staged': 'Rien n’est indexé : ajoutez des fichiers à l’index avant de committer.',
   'commit-message-required': 'Un résumé de commit non vide est requis.',
-  'push-rejected': 'Push refusé par le dépôt distant (il contient des commits que vous n’avez pas). Récupérez-les d’abord.',
+  'push-rejected': 'Push refusé par le dépôt distant (il contient des commits que vous n’avez pas). Récupérez-les d’abord. Si vous avez réécrit des commits déjà poussés (amend, rebase), un push forcé avec lease existe : c’est une action distincte, jamais lancée automatiquement.',
+  'force-push-stale': 'Push forcé refusé : l’upstream a changé depuis votre dernier fetch, rien n’a été écrasé. Récupérez ses nouveaux commits (fetch), vérifiez-les, puis recommencez.',
   'push-indeterminate': 'Résultat du push incertain : la connexion s’est interrompue. Vérifiez la branche distante avant de réessayer.',
   'push-verification-failed': 'Le push s’est terminé mais la branche distante ne pointe pas sur votre commit. Vérifiez-la avant de réessayer.',
   'upstream-missing': 'Cette branche n’a pas de branche distante associée (upstream).',
@@ -34,7 +35,12 @@ const MESSAGES = {
   'operation-in-progress': 'Une opération Git (rebase, cherry-pick, merge) est en cours : terminez-la ou annulez-la d’abord.',
   'invalid-content': 'Contenu de fichier invalide.',
   'file-not-editable': 'Ce fichier est binaire ou trop volumineux pour l’éditeur.',
-  'remote-no-web': 'Ce dépôt distant n’a pas de page web connue (URL locale ou non reconnue).',
+  'invalid-remote-name': 'Nom de dépôt distant invalide (ni espace, ni « - » initial, ni caractère interdit dans une référence Git).',
+  'invalid-remote-url': 'URL de dépôt distant invalide.',
+  'remote-url-credentials': 'Cette URL contient des identifiants (utilisateur:jeton@ ou jeton@) : ils resteraient en clair dans .git/config. Donnez l’URL sans identifiants, le credential helper du Git système (Git Credential Manager) les fournira, ou utilisez une URL SSH.',
+  'remote-exists': 'Un dépôt distant porte déjà ce nom.',
+  'remote-not-found': 'Ce dépôt distant n’existe pas (ou plus). Actualisez la vue.',
+  'remote-no-web':'Ce dépôt distant n’a pas de page web connue (URL locale ou non reconnue).',
   'update-check-failed': 'Impossible de joindre GitHub pour rechercher une mise à jour (hors ligne, proxy ou limite de l’API). Réessayez plus tard.',
   'invalid-update-channel': 'Canal de mise à jour inconnu.',
   'update-not-available': 'Aucune mise à jour à installer : relancez la recherche.',
@@ -43,6 +49,10 @@ const MESSAGES = {
   'update-checksum-mismatch': 'L’installateur téléchargé ne correspond pas à son empreinte SHA-256 publiée : il a été supprimé sans être lancé.',
   'update-launch-failed': 'L’installateur a été téléchargé mais n’a pas pu être lancé.',
 };
+
+export function errorCode(error) {
+  try { return JSON.parse(error?.message)?.code ?? null; } catch { return null; }
+}
 
 export function describeError(error) {
   let detail = null;

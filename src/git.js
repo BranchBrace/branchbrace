@@ -183,6 +183,34 @@ export function remoteWebUrl(url) {
   return { host, path: pathname, provider, web: `https://${host}/${pathname}` };
 }
 
+// Partie « identifiants@ » d'une URL de remote, en forme complète (schéma://…@) ou scp (…@hôte:chemin).
+const URL_USERINFO = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]+)@/i;
+const SCP_USERINFO = /^([^@/\s]+)@(?=[a-z0-9.-]+:(?!\/\/))/i;
+
+// Identifiants dans une URL de remote : « utilisateur:secret@ » quel que soit le protocole, ou toute partie « …@ » d'une
+// URL non SSH, car un jeton seul (« ghp_xxx@github.com ») ne se distingue pas d'un nom. Un utilisateur SSH
+// (« git@hôte:chemin », « ssh://git@hôte/… ») n'est pas un secret.
+export function remoteUrlHasCredentials(url) {
+  if (typeof url !== 'string') return false;
+  const full = URL_USERINFO.exec(url);
+  if (full) return full[2].includes(':') || !/^(?:ssh|git\+ssh|ssh\+git):\/\/$/i.test(full[1]);
+  return SCP_USERINFO.exec(url)?.[1].includes(':') ?? false;
+}
+
+// URL de remote affichable : les identifiants d'une URL déjà configurée sont retirés, comme pour sa page web (B1).
+export function redactRemoteUrl(url) {
+  if (!remoteUrlHasCredentials(url)) return url;
+  return URL_USERINFO.test(url) ? url.replace(URL_USERINFO, '$1') : url.replace(SCP_USERINFO, '');
+}
+
+// URL saisie pour un remote. Les identifiants sont refusés (A10) : ils resteraient en clair dans .git/config. Les
+// transports ext:: et fd:: lancent une commande ou lisent un descripteur : jamais utiles à un remote saisi ici.
+function validateRemoteUrl(url) {
+  if (typeof url !== 'string' || !url || url !== url.trim() || url.length > 2048 || url.startsWith('-') || /[\0\r\n]/.test(url)) throw new GitWorkbenchError('invalid-remote-url');
+  if (/^(?:ext|fd)::/i.test(url)) throw new GitWorkbenchError('invalid-remote-url');
+  if (remoteUrlHasCredentials(url)) throw new GitWorkbenchError('remote-url-credentials');
+}
+
 // Contenu lu par Git ou sur disque : un octet nul signale un fichier binaire, qu'on ne montre pas comme du texte.
 const isBinary = (text) => typeof text === 'string' && text.slice(0, 8000).includes('\0');
 
@@ -347,19 +375,132 @@ export class GitService {
 
   async push(expectedUpstream) {
     await this.#ensureRepositoryPath();
-    const upstream = (await runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).trim();
+    const { upstream, remote, branch } = await this.#upstreamTarget(expectedUpstream);
+    const before = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    await runGit(this.repositoryPath, ['push', '--porcelain', remote, `HEAD:refs/heads/${branch}`]);
+    return { upstream, hash: await this.#verifyRemoteBranch(remote, branch, before) };
+  }
+
+  // Ce qu'un push forcé ferait disparaître de l'upstream : les commits de sa copie locale (dernier fetch) absents de
+  // HEAD. Cette copie est le « lease » : le push forcé n'écrase la branche distante que si elle pointe encore dessus.
+  async forcePushPreview(expectedUpstream) {
+    await this.#ensureRepositoryPath();
+    if (!expectedUpstream) throw new GitWorkbenchError('upstream-missing');
+    const { upstream } = await this.#upstreamTarget(expectedUpstream);
+    const lease = (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', `refs/remotes/${upstream}^{commit}`]).catch(() => '')).trim();
+    if (!lease) throw new GitWorkbenchError('upstream-missing');
+    const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    const [raw, count] = await Promise.all([
+      runGit(this.repositoryPath, ['log', '-n', '50', '--format=%H%x00%h%x00%an%x00%s', `${head}..${lease}`]),
+      runGit(this.repositoryPath, ['rev-list', '--count', `${head}..${lease}`]),
+    ]);
+    const dropped = raw.split('\n').filter(Boolean).map((line) => {
+      const [hash, shortHash, author, ...subject] = line.split('\0');
+      return { hash, shortHash, author, subject: subject.join('\0') };
+    });
+    return { upstream, lease, head, dropped, droppedCount: Number(count.trim()) };
+  }
+
+  // Push forcé vers l'upstream affiché, toujours avec `--force-with-lease` sur la valeur attendue explicite : si la
+  // branche distante a bougé depuis `lease`, Git refuse et rien n'est écrasé. Jamais lancé en repli d'un push refusé.
+  async forcePush(expectedUpstream, lease) {
+    await this.#ensureRepositoryPath();
+    if (!expectedUpstream) throw new GitWorkbenchError('upstream-missing');
+    if (typeof lease !== 'string' || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(lease)) throw new GitWorkbenchError('invalid-revision');
+    const { upstream, remote, branch } = await this.#upstreamTarget(expectedUpstream);
+    const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    const target = `refs/heads/${branch}`;
+    // Aucun point de reprise n'existe côté serveur : celui-ci garde ici les commits distants que le push va remplacer.
+    const recoveryRef = `refs/git-workbench/recovery/force-push-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    await runGit(this.repositoryPath, ['update-ref', recoveryRef, lease]);
+    // --porcelain : l'issue de la ref se lit sur stdout (« ! » = refusée, « (stale info) » = lease périmé). Git sort
+    // alors en 1 ; une coupure réseau sort en 128 et reste indéterminée. Le succès n'est retenu qu'après relecture distante.
+    const output = await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=${target}:${lease}`, remote, `HEAD:${target}`], { acceptExitCodes: [1] })
+      .catch((error) => { throw new GitWorkbenchError(error.code, recoveryRef); });
+    const [flag, , summary = ''] = output.split('\n').map((line) => line.split('\t')).find((fields) => fields[1]?.endsWith(`:${target}`)) || [];
+    if (!flag) throw new GitWorkbenchError('push-indeterminate', recoveryRef);
+    if (flag === '!') {
+      await runGit(this.repositoryPath, ['update-ref', '-d', recoveryRef]);
+      throw new GitWorkbenchError(summary.includes('stale info') ? 'force-push-stale' : 'push-rejected');
+    }
+    const hash = await this.#verifyRemoteBranch(remote, branch, head).catch((error) => { throw new GitWorkbenchError(error.code, recoveryRef); });
+    return { upstream, hash, previous: lease, recoveryRef };
+  }
+
+  // Upstream de la branche courante, découpé en remote et branche distante ; refusé s'il diffère de celui affiché.
+  async #upstreamTarget(expectedUpstream) {
+    const upstream = (await runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']).catch((error) => {
+      if (error.code === 'git-operation-failed') throw new GitWorkbenchError('upstream-missing');
+      throw error;
+    })).trim();
     if (expectedUpstream && upstream !== expectedUpstream) throw new GitWorkbenchError('upstream-changed');
     const currentBranch = (await runGit(this.repositoryPath, ['branch', '--show-current'])).trim();
     if (!currentBranch) throw new GitWorkbenchError('upstream-missing');
     const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${currentBranch}.remote`])).trim();
     if (!remote || !upstream.startsWith(`${remote}/`)) throw new GitWorkbenchError('upstream-missing');
-    const branch = upstream.slice(remote.length + 1);
-    const before = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
-    await runGit(this.repositoryPath, ['push', '--porcelain', remote, `HEAD:refs/heads/${branch}`]);
+    return { upstream, remote, branch: upstream.slice(remote.length + 1) };
+  }
+
+  // Un push n'est réussi que si la branche distante, relue sur le serveur, pointe sur le commit poussé (A7).
+  async #verifyRemoteBranch(remote, branch, expected) {
     const remoteRef = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]);
     const actual = remoteRef.trim().split(/\s+/)[0];
-    if (!actual || actual !== before) throw new GitWorkbenchError('push-verification-failed');
-    return { upstream, hash: actual };
+    if (!actual || actual !== expected) throw new GitWorkbenchError('push-verification-failed');
+    return actual;
+  }
+
+  // Dépôts distants configurés. L'URL renvoyée est sans identifiants : le secret d'une URL déjà configurée ne quitte
+  // pas ce module, `credentials` signale seulement qu'il faut la changer.
+  async remotes() {
+    await this.#ensureRepositoryPath();
+    const raw = await runGit(this.repositoryPath, ['config', '--get-regexp', '^remote\\..*\\.url$'], { acceptExitCodes: [1] });
+    return raw.split('\n').filter(Boolean).map((line) => {
+      const [key, ...value] = line.split(' ');
+      const url = value.join(' ');
+      return { name: key.slice(7, -4), url: redactRemoteUrl(url), credentials: remoteUrlHasCredentials(url) };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async addRemote(name, url) {
+    await this.#ensureRepositoryPath();
+    await this.#validateRemoteName(name);
+    validateRemoteUrl(url);
+    if ((await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-exists');
+    await runGit(this.repositoryPath, ['remote', 'add', '--', name, url]);
+    return this.remotes();
+  }
+
+  // Git déplace aussi les branches distantes suivies et l'upstream des branches locales qui suivaient ce remote.
+  async renameRemote(name, newName) {
+    await this.#ensureRepositoryPath();
+    await this.#validateRemoteName(newName);
+    const remotes = await this.remotes();
+    if (!remotes.some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
+    if (remotes.some((item) => item.name === newName)) throw new GitWorkbenchError('remote-exists');
+    await runGit(this.repositoryPath, ['remote', 'rename', '--', name, newName]);
+    return this.remotes();
+  }
+
+  async setRemoteUrl(name, url) {
+    await this.#ensureRepositoryPath();
+    validateRemoteUrl(url);
+    if (!(await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
+    await runGit(this.repositoryPath, ['remote', 'set-url', '--', name, url]);
+    return this.remotes();
+  }
+
+  // Retire le remote de la configuration et ses branches distantes de cet ordinateur ; rien ne change sur le serveur.
+  async removeRemote(name) {
+    await this.#ensureRepositoryPath();
+    if (!(await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
+    await runGit(this.repositoryPath, ['remote', 'remove', '--', name]);
+    return this.remotes();
+  }
+
+  // Même règle que Git (« refs/remotes/<nom>/… » doit être une référence valide), sans laisser un nom passer pour une option.
+  async #validateRemoteName(name) {
+    if (typeof name !== 'string' || !name || name !== name.trim() || name.length > 255 || name.startsWith('-') || /[\0\s]/.test(name)) throw new GitWorkbenchError('invalid-remote-name');
+    await runGit(this.repositoryPath, ['check-ref-format', `refs/remotes/${name}/test`]).catch(() => { throw new GitWorkbenchError('invalid-remote-name'); });
   }
 
   async branches() {

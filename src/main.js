@@ -5,7 +5,8 @@ import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
-import { describeError } from './errors.js';
+import { describeError, errorCode } from './errors.js';
+import { askRemote } from './remote-dialog.js';
 import { checkOnStartup, openUpdates } from './update-dialog.js';
 
 const SUMMARY_LIMIT = 72;
@@ -276,6 +277,7 @@ const ui = {
       onActivate: (branch) => this.checkout(branch),
       onCheckoutRemote: (name) => this.checkoutRemote(name),
       onOpenRemote: (remote, branch) => this.invoke(() => window.workbench.openRemote(ui.root, remote, branch)),
+      onRemoteMenu: (remote, x, y) => this.remoteMenu(remote, x, y),
       loadRemoteIcon: (remote) => window.workbench.remoteIcon(ui.root, remote),
       onContextMenu: (kind, ref, x, y) => this.refMenu(kind, ref, x, y),
     });
@@ -439,6 +441,7 @@ const ui = {
       null,
       ...remotes.filter((remote) => remote.web).map((remote) => [`Ouvrir ${remote.name} sur ${remote.host}`, () => this.invoke(() => window.workbench.openRemote(ui.root, remote.name))]),
       remotes.some((remote) => remote.web) ? null : undefined,
+      ['Ajouter un dépôt distant…', () => this.editRemote()],
       ['Copier le chemin du dépôt', () => this.copy(this.root, 'Chemin copié')],
     ], x, y);
   },
@@ -546,6 +549,57 @@ const ui = {
     const result = await this.act(() => window.workbench.push(ui.root, this.upstream));
     if (result) { await this.reload(); this.message(`Push vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}).`); }
   },
+  // Lease périmé : l'upstream a bougé depuis le dernier fetch, on propose de le récupérer plutôt que de réessayer.
+  async forcePush() {
+    let result;
+    try { result = await window.workbench.forcePush(ui.root, this.upstream); }
+    catch (error) {
+      const text = describeError(error);
+      this.message(text);
+      if (errorCode(error) !== 'force-push-stale') await alertDialog({ title: 'Opération refusée', message: text });
+      else if (await confirmDialog({ title: 'L’upstream a changé', message: `${text}\n\nRécupérer maintenant les branches distantes ?` })) await this.fetch();
+      return;
+    }
+    if (result) { await this.reload(); this.message(`Push forcé vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}). Anciens commits distants conservés : ${result.recoveryRef}.`); }
+  },
+  // Ajout (sans `remote`) ou changement d'URL : un refus réaffiche le formulaire avec sa raison.
+  async editRemote(remote = null) {
+    let values = { name: remote ? null : '', url: remote?.url ?? '' };
+    let error = '';
+    for (;;) {
+      const answer = await askRemote({ ...values, error, title: remote ? `URL de « ${remote.name} »` : 'Ajouter un dépôt distant', confirmLabel: remote ? 'Enregistrer' : 'Ajouter' });
+      if (!answer) return;
+      values = answer;
+      try {
+        if (remote) await window.workbench.setRemoteUrl(ui.root, remote.name, answer.url);
+        else await window.workbench.addRemote(ui.root, answer.name, answer.url);
+      } catch (failure) { error = describeError(failure); continue; }
+      await this.reload();
+      this.message(remote ? `URL de « ${remote.name} » changée.` : `Dépôt distant « ${answer.name} » ajouté. Récupérez-le (fetch) pour voir ses branches.`);
+      return;
+    }
+  },
+  async renameRemote(name) {
+    const newName = await askText({ title: `Renommer « ${name} »`, label: 'NOUVEAU NOM', value: name, confirmLabel: 'Renommer', hint: 'Les branches distantes et l’upstream des branches locales suivent le nouveau nom.' });
+    if (!newName || newName === name) return;
+    if (await this.act(() => window.workbench.renameRemote(ui.root, name, newName))) { await this.reload(); this.message(`Dépôt distant « ${name} » renommé en « ${newName} ».`); }
+  },
+  async removeRemote(name) {
+    if (await this.act(() => window.workbench.removeRemote(ui.root, name))) { await this.reload(); this.message(`Dépôt distant « ${name} » retiré.`); }
+  },
+  async remoteMenu(name, x, y) {
+    const remote = (await this.invoke(() => window.workbench.remotes(ui.root)))?.find((item) => item.name === name);
+    if (!remote) return;
+    const site = (this.refs.remotes || []).find((item) => item.name === name && item.web);
+    showMenu([
+      [remote.credentials ? `Changer l’URL (elle contient des identifiants)…` : `Changer l’URL de « ${name} »…`, () => this.editRemote(remote)],
+      [`Renommer « ${name} »…`, () => this.renameRemote(name)],
+      [`Retirer « ${name} »…`, () => this.removeRemote(name)],
+      null,
+      site ? [`Ouvrir ${name} sur ${site.host}`, () => this.invoke(() => window.workbench.openRemote(ui.root, name))] : undefined,
+      ['Ajouter un dépôt distant…', () => this.editRemote()],
+    ], x, y);
+  },
   commitMenu(commit, x, y) {
     const short = commit.hash.slice(0, 7);
     this.selectCommit(commit.hash);
@@ -569,6 +623,7 @@ const ui = {
       else items.push([`Créer « ${remote.branch || ref.name} » en local et basculer`, () => this.checkoutRemote(ref.name)]);
     }
     if (isCurrent) items.push([this.upstream ? `Push vers ${this.upstream}` : 'Push (upstream non configuré)', () => this.push(), !this.upstream]);
+    if (isCurrent && this.upstream) items.push([`Push forcé (lease) vers ${this.upstream}…`, () => this.forcePush()]);
     if (kind !== 'tags' && !isCurrent) {
       items.push([`Rebaser « ${this.branch} » sur « ${ref.name} »`, () => this.rebase(ref.name)]);
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);

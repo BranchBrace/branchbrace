@@ -61,4 +61,5 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   checkForUpdate: (channel) => call('updates:check', { channel }),
   installUpdate: () => call('updates:install'),
   onUpdateProgress: (handler) => ipcRenderer.on('updates:progress', (_event, { received, total }) => handler({ received, total })),
+  remoteIcon: (root, remote) => call('shell:remote-icon', { root, remote }),
 }));

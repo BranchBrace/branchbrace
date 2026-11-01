@@ -1,7 +1,8 @@
 // Monaco, l'éditeur de VS Code, chargé sans les services de langage (TypeScript, JSON, CSS, HTML) : ils exigent
 // chacun un worker de plusieurs mégaoctets et n'apportent rien à la lecture d'un diff. La coloration syntaxique
-// passe par les grammaires Monarch de toutes les langues ; seul le worker de l'éditeur (calcul des diffs) est chargé,
-// intégré au bundle pour fonctionner aussi depuis le paquet installé (file://).
+// passe par les grammaires Monarch de toutes les langues, complétées par les grammaires TextMate des extensions VS Code
+// (voir textmate.js) ; seul le worker de l'éditeur (calcul des diffs) est chargé, intégré au bundle pour fonctionner
+// aussi depuis le paquet installé (file://).
 // Liste reprise de monaco-editor/esm/vs/editor/editor.main.js (version figée dans package.json), sans les langages.
 import * as monaco from 'monaco-esm/editor/editor.api.js';
 import 'monaco-esm/languages/definitions/register.all.js';
@@ -80,6 +81,7 @@ import 'monaco-esm/editor/contrib/semanticTokens/browser/documentSemanticTokens.
 import 'monaco-esm/editor/contrib/suggest/browser/suggestController.js';
 import 'monaco-esm/editor/common/standaloneStrings.js';
 import 'monaco-esm/base/browser/ui/codicons/codicon/codicon-modifiers.css';
+import { applyCatalog, fallbackLanguage, fileLanguage, loadCatalog, setFallback, themeRules } from './textmate.js';
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
@@ -87,7 +89,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 monaco.editor.defineTheme('workbench', {
   base: 'vs-dark',
   inherit: true,
-  rules: [],
+  rules: themeRules,
   colors: {
     'editor.background': '#0a1124',
     'editor.lineHighlightBackground': '#13203a',
@@ -115,17 +117,29 @@ monaco.editor.defineTheme('workbench', {
 });
 monaco.editor.setTheme('workbench');
 
+export { applyCatalog };
+
 // Langage Monarch d'après l'extension (ou le nom) du fichier ; JSON utilise la grammaire JavaScript, faute de la sienne.
 const EXTRA = { json: 'javascript', jsonc: 'javascript', cjs: 'javascript', mjs: 'javascript', svelte: 'html', vue: 'html', gradle: 'kotlin', kts: 'kotlin', toml: 'ini', properties: 'ini', env: 'shell', sk: 'python' };
-export function languageFor(filePath) {
-  const name = filePath.split('/').pop().toLowerCase();
+function monarchLanguage(name) {
   if (name === 'dockerfile' || name.startsWith('dockerfile.')) return 'dockerfile';
   if (name === 'makefile') return 'shell';
   const extension = name.includes('.') ? name.split('.').pop() : '';
   if (EXTRA[extension]) return EXTRA[extension];
-  const match = monaco.languages.getLanguages().find((language) => language.extensions?.includes(`.${extension}`));
-  return match?.id || 'plaintext';
+  const match = monaco.languages.getLanguages().find((language) => !language.id.startsWith('tm.') && language.extensions?.includes(`.${extension}`));
+  return match?.id || null;
 }
+
+// Une extension installée ou importée l'emporte sur Monarch ; les grammaires intégrées à VS Code ne couvrent que les
+// fichiers que Monarch ne sait pas colorer. Une grammaire qui échoue rend ses fichiers à Monarch.
+export function languageFor(filePath) {
+  return fileLanguage(filePath.split('/').pop().toLowerCase(), monarchLanguage);
+}
+setFallback((id) => fallbackLanguage(id, monarchLanguage));
+
+// Grammaires des extensions VS Code : sans elles (aucune extension, lecture impossible, réponse trop lente), Monarch
+// colore seul ; un catalogue arrivé en retard s'applique aux fichiers ouverts ensuite.
+await loadCatalog(monaco, () => window.workbench.grammarCatalog());
 
 export const baseOptions = {
   theme: 'workbench',

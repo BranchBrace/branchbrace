@@ -64,7 +64,7 @@ Correctif (`scripts/package-windows-release.sh`) : `chown -R <uid hôte>:<gid h�
 
 ## Sécurité et confidentialité — limites explicites
 
-- Le processus Git est lancé par `spawn('git', args, { shell: false })` ; les chemins de fichiers sont passés après `--`. Electron utilise `contextIsolation`, `sandbox`, `webSecurity`, `nodeIntegration: false`, navigation externe bloquée et CSP `connect-src 'none'`.
+- Le processus Git est lancé par `spawn('git', args, { shell: false })` ; les chemins de fichiers sont passés après `--`. Electron utilise `contextIsolation`, `sandbox`, `webSecurity`, `nodeIntegration: false`, navigation externe bloquée et CSP `connect-src 'none'` (`script-src` n'ajoute que `'wasm-unsafe-eval'`, pour le moteur Oniguruma des grammaires TextMate, lu depuis le paquet installé).
 - Le code de l’application ne comporte pas de compte, télémétrie, API hébergée ni appel réseau applicatif. L’inspection, les diffs, stage/unstage et commits sont locaux. Les secrets ne sont pas écrits dans les journaux d’application.
 - Un push est une exception volontaire et explicite : après confirmation, Git transmet les commits à l’upstream affiché. Git/SSH/credential helper configuré par l’utilisateur gère l’authentification ; l’app ne stocke ni n’affiche le token. Le push vérifie ensuite le hash de la branche distante via `git ls-remote`.
 - Les hooks et credential helpers configurés restent actifs. Les hooks sont des programmes choisis par l’utilisateur et peuvent avoir leurs propres effets réseau ; ceux-ci ne sont pas sandboxés/garantis par Git Workbench. Aucune capture réseau avec proxy n’a été réalisée : la garantie ci-dessus repose sur l’inspection de la configuration et du code ainsi que sur les tests locaux, pas sur une observation exhaustive de toutes les extensions/hooks de l’utilisateur.
@@ -72,7 +72,7 @@ Correctif (`scripts/package-windows-release.sh`) : `chown -R <uid hôte>:<gid h�
 
 ## Hors MVP / limites
 
-- Stage/unstage par fichier entier seulement ; pas de staging partiel par hunk.
+- Stage/unstage partiel (bloc, ligne) : `git apply --cached` puis relecture de `git diff --cached` et du contenu indexé, restauration de l’index en cas d’écart (`test/partial-staging.test.js`). Refusé pour les fichiers renommés, en conflit, binaires, liens symboliques, à filtre Git autre que les fins de ligne, ou à fins de ligne CR seules : ceux-là s’indexent en entier. Le chemin « vérification échouée → index restauré » n’est pas reproduit par un test (aucune fixture ne fait diverger `git apply`) ; le refus de `git apply` (index verrouillé) l’est.
 - Rebase interactif : actions `pick`, `drop`, `fixup` uniquement ; pas de reword/edit/squash.
 - Pas de merge, fetch/pull automatique, résolution intégrée de conflits, force-push, opérations reset/discard/amend/squash, intégrations d’hébergeur, comptes, télémétrie ni distribution publique.
 - Une référence `refs/git-workbench/recovery/...` est conservée avant cherry-pick/rebase. Après conflit, le dépôt reste dans l’état Git d’opération interrompue ; terminer avec Git ou utiliser la commande `--abort` indiquée dans le message.

@@ -99,9 +99,9 @@ test('references(), stageAll() and createBranch() at a start point', async (t) =
 
 test('the status --branch header gives the branch and its upstream in a single Git call', async () => {
   const { parseBranchHeader } = await import('../src/git.js');
-  assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 1, behind 2]'), { branch: 'main', upstream: 'origin/main' });
-  assert.deepEqual(parseBranchHeader('## feature/x'), { branch: 'feature/x', upstream: null });
-  assert.deepEqual(parseBranchHeader('## topic...origin/topic [gone]'), { branch: 'topic', upstream: null });
-  assert.deepEqual(parseBranchHeader('## HEAD (no branch)'), { branch: '(HEAD détachée)', upstream: null });
-  assert.deepEqual(parseBranchHeader('## No commits yet on main'), { branch: 'main', upstream: null });
+  assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 1, behind 2]'), { branch: 'main', upstream: 'origin/main', ahead: 1, behind: 2 });
+  assert.deepEqual(parseBranchHeader('## feature/x'), { branch: 'feature/x', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## topic...origin/topic [gone]'), { branch: 'topic', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## HEAD (no branch)'), { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## No commits yet on main'), { branch: 'main', upstream: null, ahead: 0, behind: 0 });
 });

@@ -1,3 +1,10 @@
+# [1.1.0-rc.8](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.7...v1.1.0-rc.8) (2026-11-01)
+
+
+### Features
+
+* renommer le projet en BranchBrace et ajouter Buy Me a Coffee ([0a6d9b0](https://github.com/monnierant/git-workbench/commit/0a6d9b0cb06d437a0a25fece07eaab9e473b7eb7))
+
 # [1.1.0-rc.7](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.6...v1.1.0-rc.7) (2026-11-01)
 
 

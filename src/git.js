@@ -99,6 +99,7 @@ function classifyFailure(args, stderr) {
   if (args[0] === 'push') return 'push-indeterminate';
   if (args[0] === 'fetch') return 'fetch-failed';
   if (text.includes('not a git repository')) return 'not-a-repository';
+  if (text.includes('not possible to fast-forward') || text.includes('diverging branches')) return 'pull-diverged';
   if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
   return 'git-operation-failed';
 }
@@ -115,14 +116,31 @@ export class GitWorkbenchError extends Error {
 
 // En-tête de `status --branch` : « ## main...origin/main [ahead 1] », « ## main », « ## HEAD (no branch) »
 // ou « ## No commits yet on main ». Un upstream « [gone] » (branche distante supprimée) compte comme absent.
+// L'avance et le retard sur l'upstream (↑ ahead, ↓ behind) se lisent dans le même en-tête.
 export function parseBranchHeader(header) {
   const text = header.slice(3);
-  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null };
+  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 };
   const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text);
-  if (unborn) return { branch: unborn[1], upstream: null };
+  if (unborn) return { branch: unborn[1], upstream: null, ahead: 0, behind: 0 };
   const [names, tracking = ''] = text.split(' [');
   const [branch, upstream] = names.split('...');
-  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null };
+  const ahead = Number(/ahead (\d+)/.exec(tracking)?.[1] || 0);
+  const behind = Number(/behind (\d+)/.exec(tracking)?.[1] || 0);
+  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null, ahead, behind };
+}
+
+// Environnement d'un fetch lancé sans action de l'utilisateur : aucune invite d'identifiants ne doit bloquer en
+// arrière-plan. Git n'interroge plus le terminal, Git Credential Manager n'ouvre pas de fenêtre et SSH échoue au lieu
+// de demander une phrase de passe ou de valider une clé d'hôte inconnue. Un helper qui a déjà le secret le fournit
+// toujours. La commande SSH configurée (variable ou core.sshCommand) est gardée, complétée de BatchMode ; un client
+// non-OpenSSH (GIT_SSH, plink) n'est pas touché.
+export function nonInteractiveEnv(sshCommand = null, environment = process.env) {
+  const env = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never' };
+  if (environment.GIT_SSH && !environment.GIT_SSH_COMMAND) return env;
+  const base = environment.GIT_SSH_COMMAND || sshCommand || 'ssh';
+  if (/plink/i.test(base)) return env;
+  env.GIT_SSH_COMMAND = `${base} -o BatchMode=yes`;
+  return env;
 }
 
 function parseStatus(raw) {
@@ -227,9 +245,51 @@ export class GitService {
 
   // Récupère les branches de tous les dépôts distants. `--prune` retire les copies locales des branches supprimées
   // côté serveur : seules des références de suivi changent, jamais une branche locale ni l'arbre de travail.
-  async fetch() {
+  // En arrière-plan (`background`), le fetch est sauté s'il y en a déjà un en cours ou si une opération Git
+  // (rebase, merge, cherry-pick) attend d'être terminée, et ne peut jamais demander d'identifiants.
+  #fetching = null;
+  async fetch({ background = false } = {}) {
     await this.#ensureRepositoryPath();
-    await runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules']);
+    if (background) {
+      if (this.#fetching) return { skipped: 'in-flight' };
+      const operation = await this.operation();
+      if (operation) return { skipped: 'operation', operation };
+    } else await this.#fetching?.catch(() => {});
+    const env = background ? nonInteractiveEnv(await this.#configuredSshCommand()) : {};
+    this.#fetching = runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules'], { env });
+    try { await this.#fetching; }
+    finally { this.#fetching = null; }
+    return { skipped: null };
+  }
+
+  // Avance la branche courante jusqu'à son upstream, en fast-forward uniquement : jamais de merge ni de rebase
+  // implicite. Récupère d'abord le dépôt distant de l'upstream, refuse si les branches ont divergé, puis vérifie
+  // que HEAD est bien le commit de l'upstream. Des changements locaux que l'avance écraserait font refuser Git.
+  async pull() {
+    await this.#ensureRepositoryPath();
+    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    const branch = (await runGit(this.repositoryPath, ['branch', '--show-current'])).trim();
+    if (!branch) throw new GitWorkbenchError('upstream-missing');
+    const upstream = await runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']).then((name) => name.trim(), () => null);
+    if (!upstream) throw new GitWorkbenchError('upstream-missing');
+    const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch}.remote`], { acceptExitCodes: [1] })).trim();
+    if (remote && remote !== '.') await runGit(this.repositoryPath, ['fetch', '--prune', '--no-recurse-submodules', remote]);
+    const [before, target] = await Promise.all([
+      runGit(this.repositoryPath, ['rev-parse', 'HEAD']).then((hash) => hash.trim()),
+      runGit(this.repositoryPath, ['rev-parse', '--verify', '@{upstream}^{commit}']).then((hash) => hash.trim()),
+    ]);
+    const isAncestor = (ancestor, descendant) => runGit(this.repositoryPath, ['merge-base', '--is-ancestor', ancestor, descendant]).then(() => true, () => false);
+    if (await isAncestor(target, before)) return { upstream, before, hash: before, updated: false, status: await this.status() };
+    if (!await isAncestor(before, target)) throw new GitWorkbenchError('pull-diverged');
+    await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-edit', target]);
+    const after = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    if (after !== target) throw new GitWorkbenchError('pull-verification-failed');
+    return { upstream, before, hash: after, updated: true, status: await this.status() };
+  }
+
+  async #configuredSshCommand() {
+    const value = await runGit(this.repositoryPath, ['config', '--get', 'core.sshCommand'], { acceptExitCodes: [1] });
+    return value.trim() || null;
   }
 
   // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.

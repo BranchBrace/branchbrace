@@ -5,6 +5,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { GitService, GitWorkbenchError } = require('../src/git.js');
 const updates = require('../src/updates.js');
+const syncSettings = require('../src/sync-settings.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
 let mainWindow;
@@ -12,6 +13,7 @@ const repositories = new Map();
 const favicons = new Map();
 const sessionFile = () => path.join(app.getPath('userData'), 'session.json');
 const updateSettingsFile = () => path.join(app.getPath('userData'), 'updates.json');
+const syncSettingsFile = () => path.join(app.getPath('userData'), 'sync.json');
 // Dernière release trouvée : l'installation ne porte que sur elle, jamais sur une URL reçue de la page.
 let lastUpdateCheck = null;
 let updateInProgress = false;
@@ -199,7 +201,16 @@ app.whenReady().then(() => {
   });
   handle('repository:refresh', async (_event, { root }) => snapshot(root));
   // Récupération explicite depuis les dépôts distants : met à jour les branches distantes affichées, rien d'autre.
-  handle('repository:fetch', async (_event, { root }) => { await service(root).fetch(); return snapshot(root); });
+  // `background` : fetch automatique, sans invite d'identifiants, sauté pendant une opération Git ou un autre fetch.
+  handle('repository:fetch', async (_event, { root, background }) => {
+    const { skipped } = await service(root).fetch({ background: background === true });
+    return { skipped, ...(await snapshot(root)) };
+  });
+  // Pull en fast-forward uniquement, sans confirmation : aucune réécriture ni merge, Git refuse de lui-même s'il
+  // écraserait des changements locaux.
+  handle('repository:pull', async (_event, { root }) => service(root).pull());
+  handle('sync:settings', async () => syncSettings.readSyncSettings(syncSettingsFile()));
+  handle('sync:settings:set', async (_event, changes) => syncSettings.writeSyncSettings(syncSettingsFile(), changes));
   handle('repository:branch:checkout-remote', async (_event, { root, name }) => service(root).checkoutRemote(name));
   handle('repository:versions', async (_event, { root, path: filePath, staged }) => service(root).workingVersions(filePath, staged === true));
   handle('repository:commit:versions', async (_event, { root, hash, path: filePath }) => service(root).commitVersions(hash, filePath));

@@ -1,7 +1,7 @@
 import { WIP, renderGraph } from './graph-view.js';
 import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
-import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
+import { alertDialog, askText, confirmDialog, element, modal, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
@@ -75,6 +75,7 @@ const ui = {
     $('#open-repo').title = `${data.root}\nCliquer pour ouvrir un autre dépôt dans un nouvel onglet`;
     $('#empty-state').hidden = true;
     for (const id of ['#new-branch', '#refresh', '#fetch-button', '#folder-button', '#view-graph', '#view-editor']) $(id).disabled = false;
+    autoFetch.run(data.root, { reason: 'open' });
     this.selected = null;
     this.selectedCommit = WIP;
     this.details = null;
@@ -129,7 +130,8 @@ const ui = {
     this.details = null;
     $('#repo-name').textContent = 'Aucun dépôt';
     $('#branch-name').textContent = '—';
-    for (const id of ['#new-branch', '#refresh', '#push-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor']) $(id).disabled = true;
+    for (const id of ['#new-branch', '#refresh', '#push-button', '#pull-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor']) $(id).disabled = true;
+    $('#sync-state').hidden = true;
     this.setView(null);
     $('#operation-banner').hidden = true;
     $('#empty-state').hidden = false;
@@ -152,6 +154,7 @@ const ui = {
     $('#branch-name').textContent = status.branch;
     $('#push-button').disabled = !status.upstream;
     $('#push-button').title = status.upstream ? `Pousser vers ${status.upstream}` : 'Upstream non configuré';
+    this.renderSyncState(status);
     if (this.selectedCommit !== WIP && !this.graph.commits.some((commit) => commit.hash === this.selectedCommit)) { this.selectedCommit = WIP; this.details = null; }
     this.renderGraph();
     this.renderRefs();
@@ -420,12 +423,51 @@ const ui = {
     const status = await this.act(() => window.workbench.checkoutRemote(ui.root, name));
     if (status) { await this.reload(); this.message(`Branche locale « ${status.branch} » créée : elle suit ${name}.`); }
   },
+  // ↑ commits locaux à pousser, ↓ commits distants à récupérer par Pull. Le bouton Pull reste actif dès qu'il y a
+  // un upstream : un clic sur une branche divergée explique le refus.
+  renderSyncState(status) {
+    const state = $('#sync-state');
+    const { upstream, ahead = 0, behind = 0 } = status;
+    state.hidden = !upstream;
+    state.classList.toggle('diverged', ahead > 0 && behind > 0);
+    const up = document.createElement('span'); up.textContent = `↑${ahead}`;
+    const down = document.createElement('span'); down.textContent = `↓${behind}`;
+    down.classList.toggle('behind', behind > 0);
+    state.replaceChildren(up, ' ', down);
+    state.title = !upstream ? '' : ahead && behind
+      ? `Divergée de ${upstream} : ${ahead} commit(s) local(aux), ${behind} distant(s). Un pull en avance rapide est impossible.`
+      : `${ahead} commit(s) à pousser, ${behind} à récupérer depuis ${upstream} (état du dernier fetch).`;
+    $('#pull-button').disabled = !upstream;
+    $('#pull-button').title = !upstream ? 'Upstream non configuré'
+      : behind ? `Avancer ${status.branch} jusqu’à ${upstream} (${behind} commit(s), avance rapide uniquement)`
+        : `Récupérer ${upstream} et avancer ${status.branch} s’il y a du nouveau (avance rapide uniquement)`;
+  },
+  // Échec d'un fetch automatique : un point sur le bouton Fetch, le détail dans son info-bulle, pas de fenêtre.
+  setSyncError(error) {
+    const button = $('#fetch-button');
+    button.classList.toggle('sync-error', Boolean(error));
+    button.title = error
+      ? `Dernier fetch automatique échoué : ${describeError(error)} Cliquer pour réessayer.`
+      : 'Récupérer les branches des dépôts distants (git fetch --all --prune)';
+  },
+  async pull() {
+    $('#pull-button').disabled = true;
+    this.message(`Pull de ${this.upstream} (avance rapide uniquement)…`);
+    const result = await this.act(() => window.workbench.pull(ui.root));
+    await this.reload();
+    if (!result) return;
+    this.message(result.updated
+      ? `${this.branch} avancée jusqu’à ${result.upstream} (${result.hash.slice(0, 12)}).`
+      : `${this.branch} est déjà à jour avec ${result.upstream}.`);
+  },
   async fetch() {
     $('#fetch-button').disabled = true;
     this.message('Récupération depuis les dépôts distants…');
     const data = await this.act(() => window.workbench.fetch(ui.root));
     $('#fetch-button').disabled = !this.opened;
     if (!data) return;
+    autoFetch.done(ui.root);
+    this.setSyncError(null);
     this.update(data.status, data.graph, data.refs);
     const behind = data.refs.local.filter((ref) => ref.behind).map((ref) => `${ref.name} ↓${ref.behind}`);
     this.message(`Fetch terminé. ${behind.length ? `En retard sur la distante : ${behind.join(', ')}.` : 'Les branches suivies sont à jour.'}`);
@@ -608,6 +650,7 @@ const appMenu = () => {
     ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
     ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
     null,
+    [`Fetch automatique${autoFetch.settings.autoFetch ? ` (${autoFetch.settings.intervalMinutes} min)` : ' (désactivé)'}…`, () => autoFetch.configure()],
     [ui.update ? `Mise à jour disponible (${ui.update.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.update), onResult: setUpdate })],
     ['Recharger la fenêtre', () => windowAction('reload')],
     import.meta.env.DEV ? ['Outils de développement', () => windowAction('devtools'), false, 'Ctrl+Maj+I'] : undefined,
@@ -631,6 +674,84 @@ document.addEventListener('keydown', (event) => {
   shortcut();
 });
 
+// Fetch automatique en arrière-plan : toutes les N minutes, à l'ouverture d'un onglet et au retour sur la fenêtre.
+// Silencieux s'il réussit (seuls le graphe, les branches et ↑↓ bougent), un point discret sur Fetch s'il échoue.
+// Ni pull ni merge : la branche courante n'avance que par le bouton Pull.
+const FETCH_INTERVALS = [1, 2, 5, 10, 15, 30, 60];
+const FOCUS_DEBOUNCE = 1500;
+// Hors minuterie, pas de nouveau fetch si le précédent de cet onglet a moins d'une minute.
+const FETCH_MIN_GAP = 60 * 1000;
+const autoFetch = {
+  settings: { autoFetch: true, intervalMinutes: 5 },
+  loading: null,
+  timer: null,
+  focusTimer: null,
+  last: new Map(),
+  errors: new Map(),
+  load() {
+    this.loading ??= ui.invoke(() => window.workbench.syncSettings()).then((settings) => { if (settings) this.settings = settings; this.schedule(); });
+    return this.loading;
+  },
+  schedule() {
+    clearInterval(this.timer);
+    this.timer = this.settings.autoFetch ? setInterval(() => this.run(ui.root, { reason: 'interval' }), this.settings.intervalMinutes * 60 * 1000) : null;
+  },
+  done(root) { this.last.set(root, Date.now()); this.errors.delete(root); },
+  async run(root, { reason }) {
+    if (root === ui.root) ui.setSyncError(this.errors.get(root) ?? null);
+    await this.load();
+    if (!root || !this.settings.autoFetch || (root === ui.root && ui.operation)) return;
+    if (reason !== 'interval' && Date.now() - (this.last.get(root) || 0) < FETCH_MIN_GAP) return;
+    this.last.set(root, Date.now());
+    let data;
+    try { data = await window.workbench.fetch(root, true); }
+    catch (error) {
+      this.errors.set(root, error);
+      if (root === ui.root) ui.setSyncError(error);
+      return;
+    }
+    if (data.skipped) return;
+    this.errors.delete(root);
+    if (root !== ui.root) return;
+    ui.setSyncError(null);
+    // Rien de neuf côté distant : on ne redessine pas sous les yeux de l'utilisateur.
+    if (JSON.stringify(data.refs) !== JSON.stringify(ui.refs)) ui.update(data.status, data.graph, data.refs);
+  },
+  onFocus() {
+    clearTimeout(this.focusTimer);
+    this.focusTimer = setTimeout(() => this.run(ui.root, { reason: 'focus' }), FOCUS_DEBOUNCE);
+  },
+  async configure() {
+    await this.load();
+    const enabled = element('input');
+    enabled.type = 'checkbox';
+    enabled.checked = this.settings.autoFetch;
+    const enabledLabel = element('label', 'update-startup');
+    enabledLabel.append(enabled, ' Récupérer automatiquement les branches distantes');
+    const interval = element('select');
+    for (const minutes of FETCH_INTERVALS) {
+      const option = element('option', '', minutes === 1 ? 'Toutes les minutes' : `Toutes les ${minutes} minutes`);
+      option.value = String(minutes);
+      interval.append(option);
+    }
+    interval.value = String(this.settings.intervalMinutes);
+    const field = element('label', 'dialog-field');
+    field.append(element('span', 'eyebrow', 'FRÉQUENCE'), interval);
+    const hint = element('p', 'dialog-hint', 'Aussi à l’ouverture d’un dépôt et au retour sur la fenêtre. Seules les branches distantes sont mises à jour : la branche courante n’avance que par Pull, en avance rapide. Aucune invite d’identifiants n’est ouverte en arrière-plan.');
+    const changes = await modal('Fetch automatique', [enabledLabel, field, hint], {
+      confirmLabel: 'Enregistrer',
+      collect: () => ({ autoFetch: enabled.checked, intervalMinutes: Number(interval.value) }),
+    });
+    if (!changes) return;
+    const saved = await ui.invoke(() => window.workbench.setSyncSettings(changes));
+    if (!saved) return;
+    this.settings = saved;
+    this.schedule();
+    ui.message(saved.autoFetch ? `Fetch automatique toutes les ${saved.intervalMinutes} min.` : 'Fetch automatique désactivé.');
+  },
+};
+window.addEventListener('focus', () => autoFetch.onFocus());
+
 // Au lancement : rouvre les onglets de la session précédente et l'onglet qui était actif.
 (async () => {
   const session = await ui.invoke(() => window.workbench.restoreSession());
@@ -645,6 +766,7 @@ checkOnStartup().then((found) => {
 });
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());
+$('#pull-button').addEventListener('click', () => ui.pull());
 $('#view-graph').addEventListener('click', () => ui.showGraph());
 $('#view-editor').addEventListener('click', () => ui.showEditor());
 $('#folder-button').addEventListener('click', (event) => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); ui.folderMenu(box.left, box.bottom + 4); });

@@ -6,7 +6,7 @@ import { BranchBraceError } from './git.js';
 // Mises à jour depuis les releases GitHub publiques du projet. Seule l'API des releases est contactée, sans identifiant
 // ni donnée de dépôt, et uniquement sur demande (menu) ou si l'utilisateur a activé la vérification au démarrage.
 // Canal « stable » : releases de `main` ; canal « beta » : s'y ajoutent les préversions publiées depuis `rc`.
-export const REPOSITORY = 'MonniHermes/git-workbench';
+export const REPOSITORY = 'BranchBrace/branchbrace';
 export const CHANNELS = ['stable', 'beta'];
 const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=50`;
 const RELEASE_PAGES = `https://github.com/${REPOSITORY}/releases/`;

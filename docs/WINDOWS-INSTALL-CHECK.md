@@ -7,7 +7,7 @@ sur une vraie machine Windows. C'est la vérification que tu as choisi de faire 
 
 ## 1. Récupérer l'installateur
 
-Sur https://github.com/MonniHermes/git-workbench/releases, prendre la **dernière
+Sur https://github.com/BranchBrace/branchbrace/releases, prendre la **dernière
 pré-release** (tag `vX.Y.Z-rc.N`) et télécharger :
 - `BranchBrace Setup <version>.exe`
 - `BranchBrace Setup <version>.exe.sha256`

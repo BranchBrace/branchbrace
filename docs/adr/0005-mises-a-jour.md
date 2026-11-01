@@ -19,12 +19,12 @@ public pour que l'API des releases et les téléchargements soient accessibles s
 - Canal **Stable** : la plus haute version SemVer parmi les releases non *pre-release*.
   Canal **Bêta** : la plus haute version parmi toutes les releases, préversions RC comprises.
   Sans choix enregistré, une version installée en préversion suit le canal bêta.
-- Seule l'API publique `api.github.com/repos/MonniHermes/git-workbench/releases` est interrogée,
+- Seule l'API publique `api.github.com/repos/BranchBrace/branchbrace/releases` est interrogée,
   depuis le processus principal (`net.fetch`, proxy système respecté), sans identifiant ni donnée de
   dépôt. La recherche n'a lieu que sur clic, ou au démarrage si l'utilisateur coche l'option
   (désactivée par défaut) : la promesse « pas de réseau sans action explicite » de l'ADR 0001 tient.
 - Windows (application installée) : après confirmation, l'installateur est téléchargé depuis
-  `github.com/MonniHermes/git-workbench/releases/download/`, son SHA-256 est comparé à l'empreinte
+  `github.com/BranchBrace/branchbrace/releases/download/`, son SHA-256 est comparé à l'empreinte
   publiée, puis il est lancé et l'application se ferme. Une empreinte divergente supprime le fichier
   sans le lancer. Aucune URL ne vient de la page : le processus principal n'installe que la release
   qu'il a lui-même trouvée.

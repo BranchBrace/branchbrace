@@ -55,7 +55,7 @@ Mise en œuvre, compatible avec le build Linux + Wine de l'ADR 0003 :
    l'approbation.
 4. Créer un **profil de certificat Public Trust** lié à cette validation.
 5. Créer une inscription d'application Entra ID avec **deux identifiants fédérés GitHub**
-   (`repo:MonniHermes/git-workbench:ref:refs/heads/rc` et `…:ref:refs/heads/main`), puis lui
+   (`repo:BranchBrace/branchbrace:ref:refs/heads/rc` et `…:ref:refs/heads/main`), puis lui
    attribuer le rôle **Artifact Signing Certificate Profile Signer** sur le profil.
 6. Variables GitHub du dépôt (Settings → Secrets and variables → Actions → Variables) — ce ne sont
    pas des secrets :

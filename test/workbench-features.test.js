@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitService, remoteWebUrl } from '../src/git.js';
+import { fetchFavicon } from '../src/favicon.js';
 import { conflictCount, parseConflicts, resolveAll, resolveBlock, textSpan } from '../src/conflicts.js';
 import { formatHeader, knownScopes, parseHeader, withBreakingFooter } from '../src/conventional.js';
 
@@ -54,6 +55,23 @@ test('remote web URLs drop credentials and recognise GitHub', () => {
   assert.equal(remoteWebUrl('ssh://git@git.example.org:2201/team/app.git').provider, 'git');
   assert.equal(remoteWebUrl('/srv/git/repo.git'), null);
   assert.equal(remoteWebUrl('file:///srv/git/repo.git'), null);
+  assert.equal(remoteWebUrl('C:\\repos\\remote.git'), null);
+  assert.equal(remoteWebUrl('C:/repos/remote.git'), null);
+});
+
+test('remote favicons are small images fetched from the host root only', async () => {
+  const requested = [];
+  const reply = (type, body, ok = true) => async (url) => {
+    requested.push(url);
+    return { ok, headers: new Headers(type ? { 'content-type': type } : {}), arrayBuffer: async () => new TextEncoder().encode(body).buffer };
+  };
+  assert.equal(await fetchFavicon('git.example.org', reply('image/x-icon; charset=binary', 'ICO')), 'data:image/x-icon;base64,SUNP');
+  assert.deepEqual(requested, ['https://git.example.org/favicon.ico']);
+  assert.equal(await fetchFavicon('git.example.org', reply('text/html', '<html>')), null);
+  assert.equal(await fetchFavicon('git.example.org', reply('image/png', 'x', false)), null);
+  assert.equal(await fetchFavicon('git.example.org', reply('image/png', 'x'.repeat(70 * 1024))), null);
+  assert.equal(await fetchFavicon('git.example.org', async () => { throw new Error('offline'); }), null);
+  assert.equal(await fetchFavicon('evil.org/x?', reply('image/png', 'x')), null);
 });
 
 test('references report tracked, local-only and remote-only branches with their remote page', async (t) => {

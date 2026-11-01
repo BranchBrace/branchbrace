@@ -275,6 +275,7 @@ const ui = {
       onActivate: (branch) => this.checkout(branch),
       onCheckoutRemote: (name) => this.checkoutRemote(name),
       onOpenRemote: (remote, branch) => this.invoke(() => window.workbench.openRemote(ui.root, remote, branch)),
+      loadRemoteIcon: (remote) => window.workbench.remoteIcon(ui.root, remote),
       onContextMenu: (kind, ref, x, y) => this.refMenu(kind, ref, x, y),
     });
   },

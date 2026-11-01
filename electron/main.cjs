@@ -1,12 +1,14 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, net, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { GitService, GitWorkbenchError } = require('../src/git.js');
+const { fetchFavicon } = require('../src/favicon.js');
 
 let mainWindow;
 const repositories = new Map();
+const favicons = new Map();
 const sessionFile = () => path.join(app.getPath('userData'), 'session.json');
 
 // Onglets ouverts et onglet actif, rouverts au lancement suivant. Seuls des chemins de dépôts vérifiés y sont écrits.
@@ -238,6 +240,13 @@ Un point de récupération local sera conservé.`)) return null;
     const suffix = typeof branch === 'string' && branch ? (target.provider === 'gitlab' ? '/-/tree/' : '/tree/') + branch.split('/').map(encodeURIComponent).join('/') : '';
     await shell.openExternal(target.web + suffix);
     return true;
+  });
+  // Favicon de l'hébergeur d'un dépôt distant : l'hôte vient de la configuration Git, une seule requête par hôte.
+  handle('shell:remote-icon', async (_event, { root, remote }) => {
+    const target = (await service(root).references()).remotes.find((item) => item.name === remote);
+    if (!target?.host) return null;
+    if (!favicons.has(target.host)) favicons.set(target.host, fetchFavicon(target.host, net.fetch));
+    return favicons.get(target.host);
   });
   handle('repository:commit:details', async (_event, { root, hash }) => service(root).commitDetails(hash));
   handle('repository:commit:file-diff', async (_event, { root, hash, path: filePath }) => service(root).commitFileDiff(hash, filePath));

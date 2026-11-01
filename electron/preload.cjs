@@ -56,4 +56,5 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   showFile: (root, path) => call('shell:show-file', { root, path }),
   openTerminal: (root) => call('shell:open-terminal', { root }),
   openRemote: (root, remote, branch = null) => call('shell:open-remote', { root, remote, branch }),
+  remoteIcon: (root, remote) => call('shell:remote-icon', { root, remote }),
 }));

@@ -1,3 +1,23 @@
+# [1.1.0-rc.4](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.3...v1.1.0-rc.4) (2026-11-01)
+
+
+### Bug Fixes
+
+* **diff:** ne pas associer de fichiers à une grammaire d'une autre provenance ([8baa016](https://github.com/monnierant/git-workbench/commit/8baa016e18316b5bf75cc25e4fb8f45f788505e7))
+* **diff:** retomber sur Monarch quand une grammaire TextMate échoue ([4137d7b](https://github.com/monnierant/git-workbench/commit/4137d7b8e6e55c0c7464e0b7fd43ac638dbb3222))
+* **extensions:** garder l'ancienne version si l'import d'un .vsix échoue ([40365ec](https://github.com/monnierant/git-workbench/commit/40365ecdd6d9b217cff56f0228d42b0f10d8e748))
+* **sync:** fetch d'arrière-plan sans invite et verrou partagé avec le pull ([b54f22f](https://github.com/monnierant/git-workbench/commit/b54f22f15d16ce137cfc897ecfb3a2a84c1b248d))
+* **ui:** écarter les résultats de fetch et de pull périmés ([3b31752](https://github.com/monnierant/git-workbench/commit/3b317529b71140b9067261d112295a03d3f0dbf3))
+* **updates:** ne plus écraser la méthode ui.update avec la mise à jour trouvée ([74df5ab](https://github.com/monnierant/git-workbench/commit/74df5ab9101337d2de1d4b9634ac7498c0fe437d))
+
+
+### Features
+
+* **diff:** actions d'indexation par bloc et par ligne dans la vue de diff ([942ba36](https://github.com/monnierant/git-workbench/commit/942ba36ed0aad846e6e395476e443a3b490f0be2))
+* **diff:** coloration par les grammaires TextMate des extensions VS Code ([b8dbc88](https://github.com/monnierant/git-workbench/commit/b8dbc88e6a788e43db00be193d71727ad417550c))
+* **staging:** indexer et désindexer par bloc et par ligne avec garde de fiabilité ([bb4f42f](https://github.com/monnierant/git-workbench/commit/bb4f42f425d6e83d5daf604f768da962334cdaab))
+* **sync:** fetch automatique en arrière-plan et pull en avance rapide ([c87fee8](https://github.com/monnierant/git-workbench/commit/c87fee81d72a25adae0e893bff24ab5a2bde2ceb))
+
 # [1.1.0-rc.3](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.2...v1.1.0-rc.3) (2026-11-01)
 
 

@@ -313,3 +313,11 @@ dialog .dialog-field+.dialog-field{margin-top:10px}
 .update-result.ok{color:#8fd3b6}
 .update-result.available{color:#e2b570}
 .update-result.error{color:#bc5960}
+.merge-commits{margin:8px 0;padding:0;list-style:none;max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.merge-commits li{display:flex;gap:10px;align-items:baseline;padding:6px 10px;font-size:13px;color:#c3dfdc}
+.merge-commits li+li{border-top:1px solid var(--line)}
+.merge-commits code{color:#e2b570}
+.merge-commits span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.merge-commits small{color:#7f9aa6}
+.dialog-choice{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px;color:#c3dfdc;cursor:pointer}
+.dialog-choice input:disabled+span{opacity:.55}

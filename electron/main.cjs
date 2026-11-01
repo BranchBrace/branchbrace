@@ -407,6 +407,7 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
 
 Un point de récupération local sera conservé ; « Annuler » revient à l’état d’avant. Si ce commit est déjà poussé, la branche divergera de sa distante (l’application ne force jamais un push).`)) return null;
     return target.splitCommit(commit.hash);
+  });
   // Coloration par les grammaires TextMate : fichiers lus ici, sur le disque local uniquement. La page demande une grammaire
   // par sa portée ; l'import d'un .vsix passe par le sélecteur de fichiers, jamais par un chemin reçu de la page.
   handle('grammars:catalog', async () => (await scanGrammars()).catalog);

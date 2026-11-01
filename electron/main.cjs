@@ -286,6 +286,18 @@ Un point de récupération local sera conservé.`)) return null;
     if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
     return service(root).pushTag(name, remote);
   });
+  // Merge local : la page montre d'abord les commits entrants, puis le merge porte sur le commit prévisualisé
+  // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
+  handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));
+  handle('repository:merge', async (_event, { root, source, target, fastForward }) => {
+    if (typeof target !== 'string' || !target) throw new GitWorkbenchError('merge-source-changed');
+    return service(root).merge(source, { fastForward: fastForward === true, expectedTarget: target });
+  });
+  // Pull explicite vers l'upstream affiché : fetch puis fast-forward seul. Une divergence revient sans rien intégrer.
+  handle('repository:pull', async (_event, { root, upstream }) => {
+    if (typeof upstream !== 'string' || !upstream) throw new GitWorkbenchError('upstream-missing');
+    return service(root).pull(upstream);
+  });
   handle('repository:rebase', async (_event, { root, upstream }) => {
     await service(root).assertClean();
     const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);

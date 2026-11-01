@@ -693,6 +693,75 @@ export class GitService {
     return { recoveryRef, status: await this.status() };
   }
 
+  // Ce qu'un merge de `source` ferait entrer dans la branche courante : ses commits absents de HEAD (les 200 plus
+  // récents, et leur nombre total) et si un fast-forward suffirait (HEAD est alors un ancêtre de la source).
+  async mergePreview(source) {
+    await this.#ensureRepositoryPath();
+    const target = await this.#resolveCommit(source);
+    const [raw, total, branch, fastForward] = await Promise.all([
+      runGit(this.repositoryPath, ['log', '-n', '200', '--format=%H%x00%h%x00%an%x00%at%x00%s%x1e', `HEAD..${target}`]),
+      runGit(this.repositoryPath, ['rev-list', '--count', `HEAD..${target}`]),
+      runGit(this.repositoryPath, ['branch', '--show-current']),
+      runGit(this.repositoryPath, ['merge-base', '--is-ancestor', 'HEAD', target]).then(() => true, () => false),
+    ]);
+    const commits = raw.split('\x1e').map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
+      const [hash, shortHash, author, timestamp, ...subject] = record.split('\0');
+      return { hash, shortHash, author, timestamp: Number(timestamp), subject: subject.join('\0') };
+    });
+    return { source, target, branch: branch.trim() || null, commits, total: Number(total.trim()), fastForward };
+  }
+
+  // Merge local de `source` dans la branche courante, après un point de reprise. Commit de merge par défaut (--no-ff) ;
+  // `fastForward` laisse Git avancer la branche sans commit quand c'est possible. Jamais de squash. `expectedTarget`
+  // est le commit prévisualisé : si la source a bougé depuis, rien n'est fusionné.
+  async merge(source, { fastForward = false, expectedTarget = null } = {}) {
+    const preview = await this.mergePreview(source);
+    if (expectedTarget && preview.target !== expectedTarget) throw new GitWorkbenchError('merge-source-changed');
+    if (!preview.branch) throw new GitWorkbenchError('detached-head');
+    if (!preview.total) throw new GitWorkbenchError('nothing-to-merge');
+    await this.#assertClean();
+    // Même message que Git (« Merge branch 'x' into main »), mais calculé ici : Git ne voit que le SHA prévisualisé.
+    // `source` est déjà validé par #resolveCommit (pas d'option) ; --end-of-options serait recopié tel quel par ce mode.
+    const fullName = await runGit(this.repositoryPath, ['rev-parse', '--symbolic-full-name', source]).then((name) => name.trim(), () => '');
+    const kinds = { 'refs/heads/': 'branch', 'refs/remotes/': 'remote-tracking branch', 'refs/tags/': 'tag' };
+    const kind = Object.entries(kinds).find(([prefix]) => fullName.startsWith(prefix))?.[1];
+    const subject = kind ? `${kind} '${source}'` : `commit '${preview.target.slice(0, 7)}'`;
+    const recoveryRef = await this.#saveRecoveryRef('merge');
+    // --commit et --no-squash l'emportent sur un `branch.<nom>.mergeOptions` qui demanderait l'inverse.
+    try { await runGit(this.repositoryPath, ['merge', fastForward ? '--ff' : '--no-ff', '--commit', '--no-squash', '--no-edit', '-m', `Merge ${subject} into ${preview.branch}`, preview.target]); }
+    catch (error) {
+      // Git annonce un conflit de merge sur la sortie standard : c'est le merge resté en cours qui le signale.
+      const code = await this.operation() === 'merge' ? 'conflict' : error.code || 'git-operation-failed';
+      throw new GitWorkbenchError(code, recoveryRef, 'merge');
+    }
+    const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    return { recoveryRef, fastForwarded: head === preview.target, status: await this.status() };
+  }
+
+  // Pull explicite : fetch du dépôt distant de l'upstream, puis fast-forward seul. Si la branche a aussi des commits
+  // absents de l'upstream (divergence), rien n'est intégré : l'écart revient pour proposer un merge ou un rebase.
+  async pull(expectedUpstream) {
+    await this.#ensureRepositoryPath();
+    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    const read = (args) => runGit(this.repositoryPath, args).then((text) => text.trim(), () => '');
+    const branch = await read(['branch', '--show-current']);
+    const [upstream, remote] = branch
+      ? await Promise.all([read(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']), read(['config', '--get', `branch.${branch}.remote`])])
+      : ['', ''];
+    if (!upstream || !remote || !upstream.startsWith(`${remote}/`)) throw new GitWorkbenchError('upstream-missing');
+    if (expectedUpstream && upstream !== expectedUpstream) throw new GitWorkbenchError('upstream-changed');
+    await runGit(this.repositoryPath, ['fetch', '--prune', '--no-recurse-submodules', remote]);
+    // Branche supprimée côté serveur : le fetch --prune vient d'en retirer la copie locale.
+    const target = await read(['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}']);
+    if (!target) throw new GitWorkbenchError('upstream-missing');
+    const [ahead, behind] = (await runGit(this.repositoryPath, ['rev-list', '--left-right', '--count', `HEAD...${target}`])).trim().split(/\s+/).map(Number);
+    if (!behind || ahead) return { upstream, ahead, behind, pulled: false, diverged: Boolean(behind && ahead), recoveryRef: null };
+    const recoveryRef = await this.#saveRecoveryRef('pull');
+    try { await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-squash', target]); }
+    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef); }
+    return { upstream, ahead, behind, pulled: true, diverged: false, recoveryRef };
+  }
+
   async #rebasePlanPath() { return path.join(await this.#gitDirectory(), 'git-workbench-rebase-plan.json'); }
 
   #rebaseEditorCommand() {

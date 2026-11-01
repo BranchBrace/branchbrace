@@ -1,8 +1,8 @@
 {
-  "name": "git-workbench",
+  "name": "branchbrace",
   "description": "Desktop client Git local, privé et sans télémétrie.",
   "author": "MonniHermes",
-  "homepage": "https://github.com/MonniHermes/git-workbench",
+  "homepage": "https://github.com/BranchBrace/branchbrace",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.monnishermes.gitworkbench",
-    "productName": "Git Workbench",
+    "productName": "BranchBrace",
     "directories": {
       "output": "artifacts"
     },
@@ -29,7 +29,15 @@
       "dist/**/*",
       "electron/**/*",
       "src/git.js",
+      "src/partial-staging.js",
+      "src/updates.js",
+      "src/extensions.js",
+      "src/grammar-catalog.js",
+      "src/sync-settings.js",
+      "src/favicon.js",
       "scripts/apply-rebase-plan.mjs",
+      "node_modules/vscode-oniguruma/release/onig.wasm",
+      "THIRD_PARTY_NOTICES.md",
       "package.json"
     ],
     "linux": {
@@ -97,10 +105,14 @@
     "electron-builder": "^26.0.12",
     "monaco-editor": "0.57.0",
     "vite": "^7.2.2",
+    "vscode-textmate": "9.3.2",
     "wait-on": "^8.0.4"
   },
   "allowScripts": {
     "electron@39.8.10": true,
     "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "vscode-oniguruma": "2.0.1"
   }
 }

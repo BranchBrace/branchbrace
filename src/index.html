@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
-    <title>Git Workbench</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>BranchBrace</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/views.css" />
     <script type="module" src="/main.js"></script>
@@ -14,12 +14,15 @@
     <header class="topbar">
       <div class="brand"><span class="brand-mark">G</span></div>
       <button id="open-repo" class="toolbar-field" title="Ouvrir un autre dépôt"><span class="eyebrow">DÉPÔT</span><strong id="repo-name">Aucun dépôt</strong></button>
-      <div class="toolbar-field"><span class="eyebrow">BRANCHE</span><strong id="branch-name">—</strong></div>
+      <div class="toolbar-field"><span class="eyebrow">BRANCHE</span><span class="branch-line"><strong id="branch-name">—</strong><span id="sync-state" class="sync-state" hidden></span></span></div>
       <nav class="toolbar" aria-label="Actions du dépôt">
         <button id="fetch-button" class="tool-button" disabled title="Récupérer les branches des dépôts distants (git fetch --all --prune)"><span class="tool-icon">⤓</span><span>Fetch</span></button>
+        <button id="pull-button" class="tool-button" disabled><span class="tool-icon">↓</span><span>Pull</span></button>
         <button id="push-button" class="tool-button" disabled><span class="tool-icon">↑</span><span>Push</span></button>
         <button id="new-branch" class="tool-button" disabled><span class="tool-icon">⑂</span><span>Branche</span></button>
         <button id="refresh" class="tool-button" disabled><span class="tool-icon">↻</span><span>Actualiser</span></button>
+        <button id="undo-button" class="tool-button" disabled title="Rien à annuler"><span class="tool-icon">↶</span><span>Undo</span></button>
+        <button id="redo-button" class="tool-button" disabled title="Rien à rétablir"><span class="tool-icon">↷</span><span>Redo</span></button>
         <span class="toolbar-separator"></span>
         <div class="view-switch" role="tablist" aria-label="Vue">
           <button id="view-graph" class="view-button active" role="tab" disabled title="Graphe des commits"><span class="tool-icon">◫</span><span>Graphe</span></button>

@@ -10,7 +10,7 @@
     }],
     ["@semantic-release/github", {
       "assets": [
-        {"path": "artifacts/*.exe", "label": "Git Workbench Setup (Windows x64)"},
+        {"path": "artifacts/*.exe", "label": "BranchBrace Setup (Windows x64)"},
         {"path": "artifacts/*.exe.sha256", "label": "SHA-256 (Windows x64 installer)"}
       ]
     }],

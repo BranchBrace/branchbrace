@@ -1,13 +1,44 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, net, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { GitService, GitWorkbenchError } = require('../src/git.js');
+const { GitService, BranchBraceError, samePath } = require('../src/git.js');
+const updates = require('../src/updates.js');
+const extensions = require('../src/extensions.js');
+const syncSettings = require('../src/sync-settings.js');
+const { fetchFavicon } = require('../src/favicon.js');
+
+// Données de l'ancien nom (session, réglages, extensions importées) : reprises une fois, au premier lancement sous
+// BranchBrace, avant toute lecture. L'ancien dossier est laissé en place.
+try {
+  const legacyUserData = path.join(app.getPath('appData'), 'Git Workbench'); // ancien nom
+  if (!fs.existsSync(app.getPath('userData')) && fs.existsSync(legacyUserData)) {
+    fs.cpSync(legacyUserData, app.getPath('userData'), { recursive: true, filter: (source) => !/[\\/](Cache|Code Cache|GPUCache|Crashpad)$/.test(source) });
+  }
+} catch (error) {
+  console.warn('Reprise des données de l’ancien nom impossible :', error);
+}
 
 let mainWindow;
 const repositories = new Map();
+const favicons = new Map();
 const sessionFile = () => path.join(app.getPath('userData'), 'session.json');
+const updateSettingsFile = () => path.join(app.getPath('userData'), 'updates.json');
+const syncSettingsFile = () => path.join(app.getPath('userData'), 'sync.json');
+// Dernière release trouvée : l'installation ne porte que sur elle, jamais sur une URL reçue de la page.
+let lastUpdateCheck = null;
+let updateInProgress = false;
+// Grammaires TextMate des extensions VS Code : inventaire fait une fois, refait après un import ou un retrait.
+const importedExtensionsDir = () => path.join(app.getPath('userData'), 'vscode-extensions');
+let grammarScan = null;
+function scanGrammars(fresh = false) {
+  if (fresh || !grammarScan) {
+    grammarScan = extensions.extensionRoots({ home: app.getPath('home'), imported: importedExtensionsDir() }).then(extensions.scanExtensions);
+    grammarScan.catch(() => { grammarScan = null; });
+  }
+  return grammarScan;
+}
 
 // Onglets ouverts et onglet actif, rouverts au lancement suivant. Seuls des chemins de dépôts vérifiés y sont écrits.
 function readSession() {
@@ -32,7 +63,7 @@ function handle(channel, handler) {
   ipcMain.handle(channel, async (...args) => {
     try { return await handler(...args); }
     catch (error) {
-      if (!(error instanceof GitWorkbenchError)) throw error;
+      if (!(error instanceof BranchBraceError)) throw error;
       return { workbenchError: { code: error.code, recoveryRef: error.recoveryRef, operation: error.operation } };
     }
   });
@@ -45,7 +76,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#070c1d',
-    title: 'Git Workbench',
+    title: 'BranchBrace',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -61,12 +92,12 @@ function createWindow() {
     if (!allowed) event.preventDefault();
   });
   mainWindow.webContents.once('did-finish-load', async () => {
-    if (process.env.GIT_WORKBENCH_SMOKE === '1') {
-      const ready = await mainWindow.webContents.executeJavaScript("document.title === 'Git Workbench' && Boolean(window.workbench)");
+    if (process.env.BRANCHBRACE_SMOKE === '1') {
+      const ready = await mainWindow.webContents.executeJavaScript("document.title === 'BranchBrace' && Boolean(window.workbench)");
       console.log(ready ? 'Desktop window and isolated preload loaded.' : 'Desktop smoke check failed.');
-      if (!ready || !process.env.GIT_WORKBENCH_SMOKE_REPO) return app.exit(ready ? 0 : 1);
+      if (!ready || !process.env.BRANCHBRACE_SMOKE_REPO) return app.exit(ready ? 0 : 1);
       try {
-        const candidate = new GitService(process.env.GIT_WORKBENCH_SMOKE_REPO);
+        const candidate = new GitService(process.env.BRANCHBRACE_SMOKE_REPO);
         await candidate.verifyRepository();
         repositories.set(candidate.repositoryPath, candidate);
         const summary = await mainWindow.webContents.executeJavaScript(
@@ -74,7 +105,7 @@ function createWindow() {
         );
         console.log(`Repository read through preload IPC: ${JSON.stringify(summary)}`);
         if (summary.commits === 0) return app.exit(1);
-        if (process.env.GIT_WORKBENCH_SMOKE_REWRITE === '1') {
+        if (process.env.BRANCHBRACE_SMOKE_REWRITE === '1') {
           // Disposable repositories only: exercises the packaged GIT_SEQUENCE_EDITOR path (pick newest, drop the other).
           const before = await candidate.history();
           const base = before[2].hash;
@@ -100,7 +131,7 @@ function createWindow() {
 // Ouvre un terminal dans le dossier du dépôt. Le chemin passe par `cwd`, jamais par une ligne de commande à interpréter.
 function openTerminal(cwd) {
   const attempts = process.platform === 'win32'
-    ? [['wt.exe', ['-d', '.']], ['cmd.exe', ['/c', 'start', 'Git Workbench', 'cmd.exe']]]
+    ? [['wt.exe', ['-d', '.']], ['cmd.exe', ['/c', 'start', 'BranchBrace', 'cmd.exe']]]
     : process.platform === 'darwin'
       ? [['open', ['-a', 'Terminal', '.']]]
       : [['x-terminal-emulator', []], ['gnome-terminal', []], ['konsole', []], ['xterm', []]];
@@ -118,7 +149,7 @@ function openTerminal(cwd) {
 
 function service(root) {
   const repository = repositories.get(root);
-  if (!repository) throw new GitWorkbenchError('repository-not-open');
+  if (!repository) throw new BranchBraceError('repository-not-open');
   return repository;
 }
 
@@ -166,7 +197,7 @@ app.whenReady().then(() => {
     return snapshot(root);
   });
   handle('session:restore', async () => {
-    if (process.env.GIT_WORKBENCH_SMOKE === '1') return { tabs: [], active: null, snapshot: null };
+    if (process.env.BRANCHBRACE_SMOKE === '1') return { tabs: [], active: null, snapshot: null };
     const saved = readSession();
     for (const candidatePath of saved.tabs) {
       try {
@@ -192,7 +223,13 @@ app.whenReady().then(() => {
   });
   handle('repository:refresh', async (_event, { root }) => snapshot(root));
   // Récupération explicite depuis les dépôts distants : met à jour les branches distantes affichées, rien d'autre.
-  handle('repository:fetch', async (_event, { root }) => { await service(root).fetch(); return snapshot(root); });
+  // `background` : fetch automatique, sans invite d'identifiants, sauté pendant une opération Git ou un autre fetch.
+  handle('repository:fetch', async (_event, { root, background }) => {
+    const { skipped } = await service(root).fetch({ background: background === true });
+    return { skipped, ...(await snapshot(root)) };
+  });
+  handle('sync:settings', async () => syncSettings.readSyncSettings(syncSettingsFile()));
+  handle('sync:settings:set', async (_event, changes) => syncSettings.writeSyncSettings(syncSettingsFile(), changes));
   handle('repository:branch:checkout-remote', async (_event, { root, name }) => service(root).checkoutRemote(name));
   handle('repository:versions', async (_event, { root, path: filePath, staged }) => service(root).workingVersions(filePath, staged === true));
   handle('repository:commit:versions', async (_event, { root, hash, path: filePath }) => service(root).commitVersions(hash, filePath));
@@ -213,20 +250,24 @@ app.whenReady().then(() => {
     return service(root).abortOperation();
   });
   handle('repository:head-message', async (_event, { root }) => service(root).headMessage());
-  // L'amend réécrit le dernier commit : confirmation seulement s'il est déjà publié (il faudrait alors forcer le push,
-  // ce que l'application ne fait jamais).
+  // L'amend réécrit le dernier commit : confirmation seulement s'il est déjà publié (il faudra alors un push forcé).
   handle('repository:amend', async (_event, { root, message }) => {
-    if (await service(root).headPublished() && !await confirm('Amender un commit déjà poussé ?', `Le dernier commit est déjà sur ${(await service(root).status()).upstream}. Après l’amend, la branche locale divergera de sa distante et un push normal sera refusé (l’application ne force jamais un push).
+    if (await service(root).headPublished() && !await confirm('Amender un commit déjà poussé ?', `Le dernier commit est déjà sur ${(await service(root).status()).upstream}. Après l’amend, la branche locale divergera de sa distante : un push normal sera refusé, seul un push forcé (avec lease, action distincte) pourra la remplacer.
 
 Un point de récupération local sera conservé.`)) return null;
     return service(root).amend(message);
   });
+  // Undo/Redo (A17) : sans confirmation, car l'état remplacé devient lui-même un point de reprise. Le service refuse
+  // d'annuler ce qui retirerait un commit déjà poussé.
+  handle('repository:undo-state', async (_event, { root }) => service(root).undoState());
+  handle('repository:undo', async (_event, { root }) => service(root).undo());
+  handle('repository:redo', async (_event, { root }) => service(root).redo());
   // Raccourcis vers le dossier du dépôt pour tester et vérifier hors de l'application.
   handle('shell:open-folder', async (_event, { root }) => { service(root); const error = await shell.openPath(root); return error === ''; });
   handle('shell:show-file', async (_event, { root, path: filePath }) => {
     service(root);
     const absolute = path.resolve(root, filePath);
-    if (!absolute.startsWith(root + path.sep)) throw new GitWorkbenchError('invalid-path');
+    if (!absolute.startsWith(root + path.sep)) throw new BranchBraceError('invalid-path');
     shell.showItemInFolder(absolute);
     return true;
   });
@@ -234,10 +275,17 @@ Un point de récupération local sera conservé.`)) return null;
   // Page web d'un dépôt distant ou d'une branche : l'URL est recalculée ici depuis la configuration Git, jamais reçue de la page.
   handle('shell:open-remote', async (_event, { root, remote, branch }) => {
     const target = (await service(root).references()).remotes.find((item) => item.name === remote);
-    if (!target?.web) throw new GitWorkbenchError('remote-no-web');
+    if (!target?.web) throw new BranchBraceError('remote-no-web');
     const suffix = typeof branch === 'string' && branch ? (target.provider === 'gitlab' ? '/-/tree/' : '/tree/') + branch.split('/').map(encodeURIComponent).join('/') : '';
     await shell.openExternal(target.web + suffix);
     return true;
+  });
+  // Favicon de l'hébergeur d'un dépôt distant : l'hôte vient de la configuration Git, une seule requête par hôte.
+  handle('shell:remote-icon', async (_event, { root, remote }) => {
+    const target = (await service(root).references()).remotes.find((item) => item.name === remote);
+    if (!target?.host) return null;
+    if (!favicons.has(target.host)) favicons.set(target.host, fetchFavicon(target.host, net.fetch));
+    return favicons.get(target.host);
   });
   handle('repository:commit:details', async (_event, { root, hash }) => service(root).commitDetails(hash));
   handle('repository:commit:file-diff', async (_event, { root, hash, path: filePath }) => service(root).commitFileDiff(hash, filePath));
@@ -246,21 +294,149 @@ Un point de récupération local sera conservé.`)) return null;
   // Seuls le push (transmission hors de la machine) et les rebases (réécriture de l'historique) en demandent une.
   handle('repository:stage', async (_event, { root, path: filePath }) => service(root).stage(filePath));
   handle('repository:unstage', async (_event, { root, path: filePath }) => service(root).unstage(filePath));
+  handle('repository:stage-lines', async (_event, { root, path: filePath, request }) => service(root).stageLines(filePath, request));
+  handle('repository:unstage-lines', async (_event, { root, path: filePath, request }) => service(root).unstageLines(filePath, request));
   handle('repository:stage-all', async (_event, { root }) => service(root).stageAll());
   handle('repository:unstage-all', async (_event, { root }) => service(root).unstageAll());
   handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));
   handle('repository:push', async (_event, { root, upstream }) => {
     const state = await service(root).status();
-    if (!state.upstream) throw new GitWorkbenchError('upstream-missing');
-    if (upstream !== state.upstream) throw new GitWorkbenchError('upstream-changed');
+    if (!state.upstream) throw new BranchBraceError('upstream-missing');
+    if (upstream !== state.upstream) throw new BranchBraceError('upstream-changed');
     if (!await confirm('Envoyer les commits ?', `Git va pousser vers ${upstream}. Le credential helper ou SSH configuré sera utilisé. Aucun force-push ne sera effectué.`)) return null;
     return service(root).push(upstream);
   });
+  // Push forcé : action distincte du push, jamais son repli. La confirmation liste les commits distants qui vont
+  // disparaître, et le lease transmis à Git est celui de cette liste : si l'upstream a bougé entre-temps, Git refuse.
+  handle('repository:force-push', async (_event, { root, upstream }) => {
+    const preview = await service(root).forcePushPreview(upstream);
+    const lines = preview.dropped.map((commit) => `${commit.shortHash} ${commit.subject}`);
+    if (preview.droppedCount > lines.length) lines.push(`… et ${preview.droppedCount - lines.length} autre(s)`);
+    const listing = lines.length
+      ? `Commits distants qui vont disparaître de ${preview.upstream} :\n${lines.join('\n')}`
+      : `Aucun commit distant ne disparaîtra : ${preview.upstream} est déjà contenu dans votre branche.`;
+    if (!await confirm('Forcer le push ?', `Git va remplacer ${preview.upstream} par votre branche locale (--force-with-lease : refusé si ${preview.upstream} a changé depuis votre dernier fetch, où il pointait sur ${preview.lease.slice(0, 12)}).
+
+${listing}
+
+Un point de récupération local conservera ces commits.`)) return null;
+    return service(root).forcePush(upstream, preview.lease);
+  });
+  // Dépôts distants : l'URL vue par la page est toujours sans identifiants, et une URL qui en contient est refusée (A10).
+  handle('repository:remotes', async (_event, { root }) => service(root).remotes());
+  handle('repository:remote:add', async (_event, { root, name, url }) => service(root).addRemote(name, url));
+  handle('repository:remote:rename', async (_event, { root, name, newName }) => service(root).renameRemote(name, newName));
+  handle('repository:remote:set-url', async (_event, { root, name, url }) => service(root).setRemoteUrl(name, url));
+  handle('repository:remote:remove', async (_event, { root, name }) => {
+    const target = (await service(root).remotes()).find((item) => item.name === name);
+    if (!target) throw new BranchBraceError('remote-not-found');
+    const refs = await service(root).references();
+    const followed = new Set(refs.remote.filter((ref) => ref.remote === name).map((ref) => ref.name));
+    const orphans = refs.local.filter((ref) => followed.has(ref.upstream)).map((ref) => ref.name);
+    if (!await confirm(`Retirer le dépôt distant « ${name} » ?`, `URL : ${target.url}
+
+Le remote sera retiré de la configuration de ce dépôt et ses ${followed.size} branche(s) distante(s) disparaîtront de cet ordinateur. Rien n’est supprimé sur le serveur.${orphans.length ? `\nCes branches locales n’auront plus d’upstream : ${orphans.join(', ')}.` : ''}
+
+Pour le rajouter plus tard, il faudra cette URL.`)) return null;
+    return service(root).removeRemote(name);
+  });
   handle('repository:branches', async (_event, { root }) => service(root).branches());
   handle('repository:branch:create', async (_event, { root, name, startPoint }) => service(root).createBranch(name, startPoint || null));
+  // Renommer en local se défait en renommant à nouveau : sans confirmation. Renommer aussi sur le dépôt distant
+  // publie un nouveau nom et en supprime un : confirmation explicite, avec ce qui sera fait.
+  handle('repository:branch:rename', async (_event, { root, name, newName, remote }) => {
+    if (remote === true) {
+      const branch = (await service(root).references()).local.find((item) => item.name === name);
+      if (!branch?.upstream || branch.gone) throw new BranchBraceError('upstream-missing');
+      if (!await confirm('Renommer aussi la branche distante ?', `« ${name} » deviendra « ${newName} » en local et sur le dépôt distant de ${branch.upstream} :
+
+1. push de « ${newName} » (nouvelle branche distante, aucun force-push) puis vérification ;
+2. « ${newName} » suivra cette nouvelle branche distante ;
+3. suppression de ${branch.upstream} sur le serveur, seulement si elle pointe encore sur ${branch.hash.slice(0, 12)}.
+
+Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivront pas automatiquement.`)) return null;
+    }
+    return service(root).renameBranch(name, newName, { remote: remote === true });
+  });
+  // Worktrees : le dossier d'une nouvelle worktree est choisi ici dans le dialogue natif, jamais reçu de la page. Un
+  // dossier non vide reçoit un sous-dossier au nom de la branche.
+  handle('repository:worktree:add', async (_event, { root, branch, newBranch }) => {
+    service(root);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: `Dossier de la worktree « ${branch} »`,
+      buttonLabel: 'Créer la worktree ici',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    let target = result.filePaths[0];
+    if (fs.existsSync(target) && fs.readdirSync(target).length) target = path.join(target, String(branch).replace(/[\\/:*?"<>|\s]+/g, '-'));
+    return service(root).addWorktree(target, { branch, newBranch: newBranch === true });
+  });
+  // Ouvre une worktree du dépôt dans un onglet : seules celles que Git liste pour ce dépôt sont acceptées.
+  handle('repository:worktree:open', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree || worktree.prunable || worktree.bare) throw new BranchBraceError('worktree-not-found');
+    const opened = [...repositories.keys()].find((key) => samePath(key, worktree.path));
+    if (opened) { writeSession(opened); return snapshot(opened); }
+    const candidate = new GitService(worktree.path);
+    const verified = await candidate.verifyRepository();
+    repositories.set(verified, candidate);
+    writeSession(verified);
+    return snapshot(verified);
+  });
+  handle('repository:worktree:remove', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree) throw new BranchBraceError('worktree-not-found');
+    const kept = worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : '';
+    const confirmed = worktree.prunable
+      ? await confirm('Oublier la worktree introuvable ?', `Le dossier ${worktree.path} est introuvable : Git va oublier cette seule worktree${kept}.
+
+S’il est seulement sur un disque débranché ou un partage indisponible, rebranchez-le plutôt : une fois oubliée, la worktree n’est plus reconnue par le dépôt.`)
+      : await confirm('Supprimer la worktree ?', `Le dossier ${worktree.path} sera supprimé${kept}.
+
+Git refusera s’il contient des changements non commités ou des fichiers non suivis : rien ne sera perdu.`);
+    if (!confirmed) return null;
+    const worktrees = await service(root).removeWorktree(worktree.path);
+    // Son onglet éventuel n'a plus de dépôt derrière lui.
+    for (const key of [...repositories.keys()]) if (samePath(key, worktree.path)) repositories.delete(key);
+    writeSession(root);
+    return { worktrees, tabs: [...repositories.keys()] };
+  });
+  // `git worktree prune` oublie toutes les worktrees introuvables, y compris celles d'un disque momentanément débranché.
+  handle('repository:worktree:prune', async (_event, { root }) => {
+    const missing = (await service(root).worktrees()).filter((item) => item.prunable && !item.locked);
+    if (missing.length && !await confirm('Oublier les worktrees introuvables ?', `Ces worktrees sont introuvables (dossier supprimé, déplacé ou sur un disque débranché) et ne peuvent pas être ouvertes :
+
+${missing.map((item) => `• ${item.path}${item.branch ? ` (branche « ${item.branch} », conservée)` : ''}`).join('\n')}
+
+Git va les oublier. Si l’une d’elles est seulement sur un disque débranché, rebranchez-le plutôt.`)) return null;
+    return service(root).pruneWorktrees();
+  });
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
+  // Revert et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
+  handle('repository:revert', async (_event, { root, commit, mainline }) => service(root).revert(commit, mainline ?? null));
+  handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
+  handle('repository:tag:push', async (_event, { root, name, remote }) => {
+    const refs = await service(root).references();
+    if (!refs.tags.some((tag) => tag.name === name)) throw new BranchBraceError('tag-not-found');
+    if (!refs.remotes.some((item) => item.name === remote)) throw new BranchBraceError('remote-not-found');
+    if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
+    return service(root).pushTag(name, remote);
+  });
+  // Merge local : la page montre d'abord les commits entrants, puis le merge porte sur le commit prévisualisé
+  // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
+  handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));
+  handle('repository:merge', async (_event, { root, source, target, fastForward }) => {
+    if (typeof target !== 'string' || !target) throw new BranchBraceError('merge-source-changed');
+    return service(root).merge(source, { fastForward: fastForward === true, expectedTarget: target });
+  });
+  // Pull explicite vers l'upstream affiché : fetch puis fast-forward seul. Une divergence revient sans rien intégrer.
+  handle('repository:pull', async (_event, { root, upstream }) => {
+    if (typeof upstream !== 'string' || !upstream) throw new BranchBraceError('upstream-missing');
+    return service(root).pull(upstream);
+  });
   handle('repository:rebase', async (_event, { root, upstream }) => {
     await service(root).assertClean();
     const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);
@@ -280,6 +456,71 @@ Un point de récupération local sera conservé.`)) return null;
     // Pas de seconde confirmation : le plan, action par action, vient d'être validé dans l'éditeur de rebase, et
     // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
+  });
+  // Découpage : réécrit la branche à partir du commit choisi, d'où la confirmation et le point de récupération.
+  handle('repository:split', async (_event, { root, hash }) => {
+    const target = service(root);
+    await target.assertClean();
+    const commit = await target.previewCommit(hash);
+    if (!await confirm('Découper ce commit ?', `« ${commit.subject} » (${commit.shortHash}) va être retiré de la branche et ses changements remis dans l’arbre de travail. Committez-les en plusieurs morceaux (par fichier, par bloc ou par ligne), puis « Continuer » rejoue les commits suivants.
+
+Un point de récupération local sera conservé ; « Annuler » revient à l’état d’avant. Si ce commit est déjà poussé, la branche divergera de sa distante (l’application ne force jamais un push).`)) return null;
+    return target.splitCommit(commit.hash);
+  });
+  // Coloration par les grammaires TextMate : fichiers lus ici, sur le disque local uniquement. La page demande une grammaire
+  // par sa portée ; l'import d'un .vsix passe par le sélecteur de fichiers, jamais par un chemin reçu de la page.
+  handle('grammars:catalog', async () => (await scanGrammars()).catalog);
+  handle('grammars:read', async (_event, { scopeName }) => extensions.readGrammar(await scanGrammars(), scopeName));
+  handle('grammars:onig', async () => fs.promises.readFile(require.resolve('vscode-oniguruma/release/onig.wasm')));
+  handle('extensions:import', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'Extension VS Code', extensions: ['vsix'] }] });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    const imported = await extensions.importVsix(result.filePaths[0], importedExtensionsDir());
+    return { imported, catalog: (await scanGrammars(true)).catalog };
+  });
+  handle('extensions:remove', async (_event, { id }) => {
+    await extensions.removeImported(importedExtensionsDir(), id);
+    return (await scanGrammars(true)).catalog;
+  });
+  // Mises à jour : réseau limité à l'API publique des releases GitHub, sur demande ou si la vérification au démarrage
+  // a été activée. Sous Windows l'installateur est téléchargé, vérifié (SHA-256) puis lancé ; ailleurs, la page de la
+  // release s'ouvre dans le navigateur.
+  handle('updates:settings', async () => ({
+    ...(await updates.readUpdateSettings(updateSettingsFile(), app.getVersion())),
+    current: app.getVersion(),
+    installable: process.platform === 'win32' && app.isPackaged,
+  }));
+  handle('updates:settings:set', async (_event, changes) => updates.writeUpdateSettings(updateSettingsFile(), app.getVersion(), changes));
+  handle('updates:check', async (_event, { channel } = {}) => {
+    const settings = await updates.readUpdateSettings(updateSettingsFile(), app.getVersion());
+    lastUpdateCheck = await updates.checkForUpdate({ currentVersion: app.getVersion(), channel: channel ?? settings.channel, fetch: net.fetch });
+    return lastUpdateCheck;
+  });
+  handle('updates:install', async () => {
+    const latest = lastUpdateCheck?.available ? lastUpdateCheck.latest : null;
+    if (!latest) throw new BranchBraceError('update-not-available');
+    if (!latest.installer || !app.isPackaged) {
+      await shell.openExternal(latest.page);
+      return { opened: latest.page };
+    }
+    if (updateInProgress) throw new BranchBraceError('update-in-progress');
+    if (!await confirm(`Installer la version ${latest.version} ?`, `L’installateur ${latest.installer.name} va être téléchargé depuis GitHub (${Math.round(latest.installer.size / 1048576)} Mo) et son empreinte SHA-256 vérifiée. BranchBrace se fermera ensuite pour laisser l’installateur remplacer la version ${app.getVersion()}.
+
+Vos onglets seront rouverts au prochain lancement.`)) return null;
+    updateInProgress = true;
+    try {
+      const file = await updates.downloadInstaller(latest.installer, path.join(app.getPath('temp'), 'branchbrace-update'), {
+        fetch: net.fetch,
+        onProgress: (progress) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:progress', progress); },
+      });
+      await new Promise((resolve, reject) => {
+        const child = spawn(file, [], { detached: true, stdio: 'ignore' });
+        child.once('error', () => reject(new BranchBraceError('update-launch-failed')));
+        child.once('spawn', () => { child.unref(); resolve(); });
+      });
+    } finally { updateInProgress = false; }
+    setTimeout(() => app.quit(), 300);
+    return { installing: latest.version };
   });
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

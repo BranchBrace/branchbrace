@@ -38,7 +38,7 @@ test('independent branch tips get distinct lanes and freed lanes are reused', ()
 });
 
 test('graph() lists every branch with decorations and excludes recovery refs', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-graph-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-graph-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = (...args) => { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   git('init', '--quiet', '-b', 'main');
@@ -49,7 +49,7 @@ test('graph() lists every branch with decorations and excludes recovery refs', a
   git('switch', '--quiet', '-c', 'feature');
   await writeFile(path.join(root, 'b.txt'), 'b\n'); git('add', '.'); git('commit', '--quiet', '-m', 'feature work');
   git('switch', '--quiet', 'main');
-  git('update-ref', 'refs/git-workbench/recovery/test', 'HEAD');
+  git('update-ref', 'refs/branchbrace/recovery/test', 'HEAD');
 
   const service = new GitService(root);
   await service.verifyRepository();
@@ -72,7 +72,7 @@ test('graph() lists every branch with decorations and excludes recovery refs', a
 });
 
 test('references(), stageAll() and createBranch() at a start point', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-refs-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-refs-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = (...args) => { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   git('init', '--quiet', '-b', 'main');
@@ -99,9 +99,9 @@ test('references(), stageAll() and createBranch() at a start point', async (t) =
 
 test('the status --branch header gives the branch and its upstream in a single Git call', async () => {
   const { parseBranchHeader } = await import('../src/git.js');
-  assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 1, behind 2]'), { branch: 'main', upstream: 'origin/main' });
-  assert.deepEqual(parseBranchHeader('## feature/x'), { branch: 'feature/x', upstream: null });
-  assert.deepEqual(parseBranchHeader('## topic...origin/topic [gone]'), { branch: 'topic', upstream: null });
-  assert.deepEqual(parseBranchHeader('## HEAD (no branch)'), { branch: '(HEAD détachée)', upstream: null });
-  assert.deepEqual(parseBranchHeader('## No commits yet on main'), { branch: 'main', upstream: null });
+  assert.deepEqual(parseBranchHeader('## main...origin/main [ahead 1, behind 2]'), { branch: 'main', upstream: 'origin/main', ahead: 1, behind: 2 });
+  assert.deepEqual(parseBranchHeader('## feature/x'), { branch: 'feature/x', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## topic...origin/topic [gone]'), { branch: 'topic', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## HEAD (no branch)'), { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 });
+  assert.deepEqual(parseBranchHeader('## No commits yet on main'), { branch: 'main', upstream: null, ahead: 0, behind: 0 });
 });

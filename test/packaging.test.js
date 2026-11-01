@@ -25,6 +25,31 @@ test('built renderer assets resolve beside the packaged file-based entry point',
   assert.match(css, /\.topbar\s*\{/, 'the expected application styles are present');
 });
 
+test('every source module the main process loads is packaged into the app', async () => {
+  const root = new URL('../', import.meta.url);
+  const pending = ['electron/main.cjs'];
+  const loaded = new Set();
+  while (pending.length > 0) {
+    const file = pending.pop();
+    const source = await readFile(new URL(file, root), 'utf8');
+    const specifiers = [
+      ...source.matchAll(/require\('(\.[^']+)'\)/g),
+      ...source.matchAll(/^import [^;]*? from '(\.[^']+)'/gm),
+    ].map(([, specifier]) => new URL(specifier, new URL(file, root)).pathname.slice(root.pathname.length));
+    for (const dependency of specifiers) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+
+  for (const file of loaded) {
+    if (file.startsWith('electron/')) continue;
+    assert.ok(manifest.build.files.includes(file), `${file} is required at runtime but missing from build.files`);
+  }
+});
+
 test('Linux x64 installer is a Debian package that declares the Git CLI dependency', () => {
   assert.deepEqual(manifest.build.linux.target, [{ target: 'deb', arch: ['x64'] }]);
   assert.ok(manifest.build.deb.depends.includes('git'), 'the app drives the installed Git CLI');

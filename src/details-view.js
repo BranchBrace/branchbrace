@@ -60,18 +60,42 @@ function summary(files, withStats) {
   return box;
 }
 
+// Pictogrammes de statut façon GitKraken : un trait coloré par type de changement, sans pastille.
+const ICONS = {
+  A: '<path d="M8 3v10M3 8h10"/>',
+  M: '<path d="M3 13l.9-3.4L10.4 3.1a1.4 1.4 0 0 1 2 0l.5.5a1.4 1.4 0 0 1 0 2L6.4 12.1z"/>',
+  D: '<path d="M3 8h10"/>',
+  R: '<path d="M3 8h9.5M9 4.5 12.5 8 9 11.5"/>',
+  C: '<rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/>',
+  T: '<path d="M3.5 3.5h9M8 3.5v9"/>',
+  U: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v2.8M8 11.2v.1"/>',
+};
+ICONS['?'] = ICONS.A;
+
+function statusIcon(status) {
+  const icon = element('span', `change-icon change-${status}`);
+  icon.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${ICONS[status] || ICONS.M}</svg>`;
+  icon.title = STATUS[status]?.[0] || status;
+  return icon;
+}
+
+// Une ligne par fichier : pictogramme, dossier en retrait puis nom, tronqués par la gauche pour garder le nom lisible.
 function fileRow(file, { selected, onOpen, onMenu, action, nested = false }) {
   const row = element('div', `details-file${selected ? ' selected' : ''}${nested ? ' nested' : ''}`);
   row.tabIndex = 0;
+  row.dataset.path = file.path;
   row.title = file.originalPath ? `${file.originalPath} → ${file.path}` : file.path;
-  const badge = element('span', `change-badge change-${file.status}`, file.status === '?' ? '+' : file.status);
-  badge.title = STATUS[file.status]?.[0] || file.status;
   const slash = file.path.lastIndexOf('/');
   const names = element('span', 'file-names');
+  const dir = nested ? '' : file.path.slice(0, slash + 1);
+  const folder = file.originalPath ? `${file.originalPath} → ${dir}` : dir;
+  if (folder) {
+    const path = element('span', 'file-folder');
+    path.append(element('bdi', '', folder));
+    names.append(path);
+  }
   names.append(element('span', 'file-name', file.path.slice(slash + 1)));
-  const folder = file.originalPath ? `${file.originalPath} →` : nested ? '' : file.path.slice(0, slash + 1);
-  if (folder) names.append(element('span', 'file-folder', folder));
-  row.append(badge, names);
+  row.append(statusIcon(file.status), names);
   if (file.binary) row.append(element('span', 'file-stat muted', 'binaire'));
   else if (file.additions !== undefined) {
     const stat = element('span', 'file-stat');
@@ -91,11 +115,27 @@ function fileRow(file, { selected, onOpen, onMenu, action, nested = false }) {
   return row;
 }
 
+// Le panneau est reconstruit à chaque clic : chaque liste repérée par sa clé garde son défilement, et la ligne
+// qui avait le focus clavier le retrouve, au lieu de tout remonter en haut.
+function replacePanel(panel, nodes) {
+  const keyOf = (node) => node.closest('[data-scroll-key]')?.dataset.scrollKey;
+  const scrolls = new Map([...panel.querySelectorAll('[data-scroll-key]')].map((list) => [list.dataset.scrollKey, list.scrollTop]));
+  const active = document.activeElement?.closest?.('.details-file');
+  const focused = active && panel.contains(active) ? { key: keyOf(active), path: active.dataset.path } : null;
+  panel.replaceChildren(...nodes);
+  panel.hidden = false;
+  for (const list of panel.querySelectorAll('[data-scroll-key]')) list.scrollTop = scrolls.get(list.dataset.scrollKey) || 0;
+  if (focused) {
+    const row = [...panel.querySelectorAll('.details-file')].find((node) => node.dataset.path === focused.path && keyOf(node) === focused.key);
+    row?.focus({ preventScroll: true });
+  }
+}
+
 const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || '?';
 const hue = (text) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 7);
 
 // Liste à plat (chemin complet) ou arborescence (fichiers regroupés par dossier), au choix, mémorisé.
-const LAYOUT_KEY = 'git-workbench.files-layout';
+const LAYOUT_KEY = 'branchbrace.files-layout';
 let layout = (() => { try { return localStorage.getItem(LAYOUT_KEY) === 'tree' ? 'tree' : 'list'; } catch { return 'list'; } })();
 
 function fileList(files, options) {
@@ -160,8 +200,8 @@ export function renderCommitDetails(panel, details, { selectedFile, onClose, onR
   const files = details.files.length
     ? fileList(details.files, (file) => ({ selected: file.path === selectedFile, onOpen: onOpenFile, onMenu: (x, y) => onFileMenu(file, x, y) }))
     : element('p', 'muted', 'Aucun fichier modifié.');
-  panel.replaceChildren(header(sha, onClose), title, description, author, parents, review, summary(details.files, true), filesHead, files);
-  panel.hidden = false;
+  files.dataset.scrollKey = `commit:${details.hash}`;
+  replacePanel(panel, [header(sha, onClose), title, description, author, parents, review, summary(details.files, true), filesHead, files]);
 }
 
 // Statut à afficher pour un fichier du WIP : celui de l'index s'il est indexé, sinon celui de l'arbre de travail.
@@ -179,6 +219,8 @@ export function renderWorkingChanges(panel, files, { branch, selectedFile, onOpe
     const head = element('div', 'stage-group-header conflict-header');
     head.append(element('span', '', `En conflit (${conflicts.length})`));
     const list = element('div', 'details-files stage-list conflict-list');
+    list.dataset.scrollKey = 'conflicts';
+    list.style.setProperty('--rows', String(Math.min(conflicts.length, 3)));
     for (const file of conflicts) {
       const resolve = element('button', 'button compact resolve-button', 'Résoudre');
       resolve.title = 'Ouvrir l’outil de fusion';
@@ -200,6 +242,8 @@ export function renderWorkingChanges(panel, files, { branch, selectedFile, onOpe
       button.addEventListener('click', bulk);
       head.append(button);
       const list = element('div', 'details-files stage-list');
+      list.dataset.scrollKey = staged ? 'staged' : 'unstaged';
+      list.style.setProperty('--rows', String(Math.min(members.length, 3)));
       for (const file of members) {
         const toggle = element('button', 'stage', staged ? '−' : '+');
         toggle.title = staged ? 'Retirer de l’index' : 'Ajouter à l’index';
@@ -213,6 +257,5 @@ export function renderWorkingChanges(panel, files, { branch, selectedFile, onOpe
       nodes.push(head, list);
     }
   }
-  panel.replaceChildren(...nodes);
-  panel.hidden = false;
+  replacePanel(panel, nodes);
 }

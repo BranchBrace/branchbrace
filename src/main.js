@@ -8,6 +8,7 @@ import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
 import { describeCode, describeError } from './errors.js';
 import { checkOnStartup, openUpdates } from './update-dialog.js';
+import { openExtensions } from './extensions-dialog.js';
 
 const SUMMARY_LIMIT = 72;
 const $ = (selector) => document.querySelector(selector);
@@ -764,6 +765,7 @@ const appMenu = () => {
     ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
     ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
     null,
+    ['Extensions VS Code…', () => openExtensions().catch((error) => ui.message(describeError(error), true))],
     [`Fetch automatique${autoFetch.settings.autoFetch ? ` (${autoFetch.settings.intervalMinutes} min)` : ' (désactivé)'}…`, () => autoFetch.configure()],
     [ui.update ? `Mise à jour disponible (${ui.update.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.update), onResult: setUpdate })],
     ['Recharger la fenêtre', () => windowAction('reload')],

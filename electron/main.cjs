@@ -5,6 +5,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { GitService, GitWorkbenchError, samePath } = require('../src/git.js');
 const updates = require('../src/updates.js');
+const extensions = require('../src/extensions.js');
 const syncSettings = require('../src/sync-settings.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
@@ -17,6 +18,16 @@ const syncSettingsFile = () => path.join(app.getPath('userData'), 'sync.json');
 // Dernière release trouvée : l'installation ne porte que sur elle, jamais sur une URL reçue de la page.
 let lastUpdateCheck = null;
 let updateInProgress = false;
+// Grammaires TextMate des extensions VS Code : inventaire fait une fois, refait après un import ou un retrait.
+const importedExtensionsDir = () => path.join(app.getPath('userData'), 'vscode-extensions');
+let grammarScan = null;
+function scanGrammars(fresh = false) {
+  if (fresh || !grammarScan) {
+    grammarScan = extensions.extensionRoots({ home: app.getPath('home'), imported: importedExtensionsDir() }).then(extensions.scanExtensions);
+    grammarScan.catch(() => { grammarScan = null; });
+  }
+  return grammarScan;
+}
 
 // Onglets ouverts et onglet actif, rouverts au lancement suivant. Seuls des chemins de dépôts vérifiés y sont écrits.
 function readSession() {
@@ -386,6 +397,21 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
     // Pas de seconde confirmation : le plan, action par action, vient d'être validé dans l'éditeur de rebase, et
     // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
+  });
+  // Coloration par les grammaires TextMate : fichiers lus ici, sur le disque local uniquement. La page demande une grammaire
+  // par sa portée ; l'import d'un .vsix passe par le sélecteur de fichiers, jamais par un chemin reçu de la page.
+  handle('grammars:catalog', async () => (await scanGrammars()).catalog);
+  handle('grammars:read', async (_event, { scopeName }) => extensions.readGrammar(await scanGrammars(), scopeName));
+  handle('grammars:onig', async () => fs.promises.readFile(require.resolve('vscode-oniguruma/release/onig.wasm')));
+  handle('extensions:import', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'Extension VS Code', extensions: ['vsix'] }] });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    const imported = await extensions.importVsix(result.filePaths[0], importedExtensionsDir());
+    return { imported, catalog: (await scanGrammars(true)).catalog };
+  });
+  handle('extensions:remove', async (_event, { id }) => {
+    await extensions.removeImported(importedExtensionsDir(), id);
+    return (await scanGrammars(true)).catalog;
   });
   // Mises à jour : réseau limité à l'API publique des releases GitHub, sur demande ou si la vérification au démarrage
   // a été activée. Sous Windows l'installateur est téléchargé, vérifié (SHA-256) puis lancé ; ailleurs, la page de la

@@ -315,6 +315,12 @@ dialog .dialog-field+.dialog-field{margin-top:10px}
 .update-result.ok{color:#8fd3b6}
 .update-result.available{color:#e2b570}
 .update-result.error{color:#bc5960}
+.extension-list{list-style:none;margin:0;padding:0;max-height:180px;overflow:auto;border-radius:8px;background:#101a30}
+.extension-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;font-size:13px;color:#c3dfdc}
+.extension-item+.extension-item{border-top:1px solid #1d2c47}
+.extension-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.extension-meta{color:#6f97a0;font-size:12px}
+.extension-empty{padding:8px 10px;font-size:12px;color:#6f97a0}
 .merge-commits{margin:8px 0;padding:0;list-style:none;max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
 .merge-commits li{display:flex;gap:10px;align-items:baseline;padding:6px 10px;font-size:13px;color:#c3dfdc}
 .merge-commits li+li{border-top:1px solid var(--line)}

@@ -1,3 +1,10 @@
+# [1.1.0-rc.7](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.6...v1.1.0-rc.7) (2026-11-01)
+
+
+### Features
+
+* **reprise:** point de reprise étendu et Undo/Redo locaux (A17) ([a3f8c96](https://github.com/monnierant/git-workbench/commit/a3f8c963410e6e6002c75c233960c3ad41d71fa7))
+
 # [1.1.0-rc.6](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.5...v1.1.0-rc.6) (2026-11-01)
 
 

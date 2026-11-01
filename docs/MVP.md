@@ -18,28 +18,40 @@ Support targets to validate: Windows 10+ x64; macOS 12+ Intel/Apple Silicon; Lin
 
 - A1. Show modified, untracked, and deleted files accurately. Inspection does not modify the repository. Verify with before/after integration fixtures.
 - A2. Stage or unstage an individual file without staging unrelated changes. Verify `git diff` and `git diff --cached`.
-- A3. Staging is file-level only; partial/hunk staging is explicitly excluded from v1, so the UI must state that a selected file's full diff is staged. Verify with integration fixtures showing one selected file and unrelated files remain untouched.
+- A3. Staging is file-level in v1. Hunk- and line-level staging and unstaging come in wave 1 (see roadmap): after each partial operation the app re-reads `git diff --cached` and rolls back if the index differs from the expected result. Verify with integration fixtures showing that the selected hunk or lines, and nothing else, are staged.
 - A4. Preview and commit only staged changes. Verify the commit tree/patch against fixtures.
 - A5. Require an explicit user action and non-empty message before committing. Verify commit object and message.
-- A6. Push only after explicit action, to the displayed upstream, never with force. Explain missing upstream and rejection. Verify with a local bare remote and ref/command inspection.
+- A6. Push only after explicit action, to the displayed upstream. A rejected push is never retried with force; force-push is the separate action of A12. Explain missing upstream and rejection. Verify with a local bare remote and ref/command inspection.
 - A7. Report push success only after Git succeeds and the remote ref is verified. Distinguish rejection from indeterminate outcomes such as network interruption. Test success, rejection, and interruption.
 - A8. Keep inspection, staging, and commit usable without network. Verify with a local repository without a reachable remote.
 - A9. Send no Git content, paths, history, credentials, or tokens to third parties. Disable telemetry by default. Verify through network/proxy tests and configuration review.
-- A10. Use existing Git/OS credential helpers or SSH. Never store credentials in clear text in preferences or logs. Verify configuration and logs.
-- A11. Do not destroy or rewrite the working tree on success or failure. Compare fixtures before and after.
-- A12. Never force-push. A push targets only the displayed upstream and reports success only after verifying its remote ref.
-- A13. Create/switch local branches without deleting branches or losing local changes; Git must refuse unsafe switches.
+- A10. Use existing Git/OS credential helpers or SSH. Never store credentials in clear text in preferences or logs; the optional vault keeps tokens in the OS keychain only (ADR 0006). Refuse remote URLs that embed credentials. Verify configuration and logs.
+- A11. Do not destroy or rewrite the working tree on success or failure, except through a confirmed destructive operation under A17. Compare fixtures before and after.
+- A12. A push targets only the displayed upstream and reports success only after verifying its remote ref. Force-push always uses `--force-with-lease`, is a separate explicit action, never an automatic fallback, and its confirmation lists the remote commits it will drop (ADR 0006).
+- A13. Create/switch local branches without losing local changes; Git must refuse unsafe switches. Branch deletion follows A17.
 - A14. Cherry-pick and rebase operations are explicit, preview their target/range, preserve a recovery point, and explain conflicts/failures; no silent history rewrite.
 - A15. Interactive rebase exposes each planned action, requires confirmation, preserves a recovery point, and supports an explained abort/recovery path.
 - A16. Respect the installed Git CLI's hooks and credential helpers; make their execution visible and never log their secret values.
+- A17. Reversible first (ADR 0006): a destructive operation (reset, discard, deletion of a branch, tag or stash entry, removal of a worktree with changes) requires an explicit action, a confirmation, and a recovery point recorded before acting. The recovery point includes uncommitted changes when the working tree is affected. Undo restores the latest recovery point and Redo the state recorded at Undo; both are local only and never rewrite a pushed commit.
 
 ## Security and privacy
 
-No hosted service, account, or telemetry by default. Inspection, history, diffs, staging, and local commits stay local. An explicit push sends the selected commits to the displayed, user-configured upstream through Git CLI; Git's configured credential helper/SSH handles authentication. The app does not collect or log credentials, and does not transmit repository data except as a direct result of that confirmed push. Existing Git hooks remain enabled and are user-controlled programs; their own side effects are outside the app's network guarantee. Keep inspection/staging/commit available offline.
+No hosted service, account, or telemetry by default. Inspection, history, diffs, staging, and local commits stay local. An explicit push sends the selected commits to the displayed, user-configured upstream through Git CLI; Git's configured credential helper/SSH handles authentication. By default the app does not see credentials: Git Credential Manager handles provider sign-in (delegated sign-in). Optionally, the app keeps personal access tokens in the OS keychain (the vault), never in clear text and never logged (ADR 0006). The app does not transmit repository data except as a direct result of an explicit push, fetch, pull or clone. Existing Git hooks remain enabled and are user-controlled programs; their own side effects are outside the app's network guarantee. Keep inspection/staging/commit available offline.
 
 ## Explicitly out of scope for v1
 
 Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation and hosting-provider APIs; cloud accounts or collaboration; AI, extensions, automatic hooks; force-push, reset, discard; stash management; submodules/worktrees; server/CI runtime; auto-update or package publication.
+
+The roadmap below lifts most of this list. Still out of scope: automatic fetch/pull; cloud accounts or collaboration; AI, extensions, automatic hooks; Git Flow; a hook-editing UI; custom themes; server/CI runtime.
+
+## Roadmap by wave (decided 2026-11-01)
+
+Comparison with GitKraken, one decision per feature. Terms are defined in `CONTEXT.md`; the safety doctrine and credentials in ADR 0006. Each wave depends on the previous one.
+
+1. **Safety and daily flow.** Recovery points extended to uncommitted changes; local Undo/Redo (A17). Revert; reset soft, mixed and hard. Local merge with a preview and a recovery point, merge commit by default, fast-forward optional, no squash merge. Pull is fetch plus fast-forward only; on divergence it explains and offers merge or rebase. Stash: save (message, untracked optional), list with content, apply/pop/drop an entry chosen by SHA, never "the top one" (the stack is shared across worktrees). Rename a local branch; delete a local branch (warning if unmerged); delete a remote branch as a separate confirmed action, never cascaded. Tags: create (annotated by default, lightweight optional), delete locally, push a single tag, delete a remote tag separately; never `--tags`. Lease-protected force-push (A12). Add, rename, re-URL and remove remotes. Hunk- and line-level staging (A3).
+2. **Identities and repositories.** Settings screen; dark, light and follow-system themes (Monaco included). Profiles: name, email, signing key and format (GPG or SSH), provider accounts; assigning a profile writes the repository's local Git config, with a warning when it drifts. Signature status shown in commit details. Delegated sign-in through Git Credential Manager, optional vault (ADR 0006). Workspaces: named sets of repositories opened as tabs, with a default profile, local only. Clone by URL and `git init`, each with a profile and an optional workspace. Command palette (Ctrl+Shift+P) listing the actions available in the current state.
+3. **History.** Progressive graph loading in batches of 500 while scrolling. History search run by Git over the whole history (message, author, SHA, optional diff content with `-S`) that brings the graph to the selected commit. File history (`--follow`) and blame in the editor margin, with blame-at-parent. Comparison of two refs in the commit review view: contribution (since the merge base) by default, direct difference as a toggle, plus the commits unique to each side. Worktrees: list, create from a branch, open as a tab, remove. Submodules: status, init, update. LFS: detection, warning when `git-lfs` is missing, no pointer shown as a diff.
+4. **Hosting providers.** GitHub and GitLab APIs: create and review pull/merge requests, browse a provider's repositories to clone. Whether delegated-sign-in tokens carry enough API scope, or the vault is required, is decided then.
 
 ## Added after v1 (explicit user actions only)
 

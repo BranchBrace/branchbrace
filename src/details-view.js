@@ -135,7 +135,7 @@ const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((pa
 const hue = (text) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 7);
 
 // Liste à plat (chemin complet) ou arborescence (fichiers regroupés par dossier), au choix, mémorisé.
-const LAYOUT_KEY = 'git-workbench.files-layout';
+const LAYOUT_KEY = 'branchbrace.files-layout';
 let layout = (() => { try { return localStorage.getItem(LAYOUT_KEY) === 'tree' ? 'tree' : 'list'; } catch { return 'list'; } })();
 
 function fileList(files, options) {

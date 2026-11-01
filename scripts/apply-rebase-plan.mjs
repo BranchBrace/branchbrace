@@ -6,13 +6,13 @@ import path from 'node:path';
 // - GIT_EDITOR (message de commit) : écrit le message choisi pour un reword ou un squash, d'après la dernière ligne
 //   de `rebase-merge/done` (le commit en cours). Sans message prévu, le fichier proposé par Git reste inchangé.
 const targetPath = process.argv.at(-1);
-const planPath = process.env.GIT_WORKBENCH_REBASE_PLAN;
+const planPath = process.env.BRANCHBRACE_REBASE_PLAN;
 if (!targetPath || !planPath) process.exit(2);
 const plan = JSON.parse(await readFile(planPath, 'utf8'));
 const COMMAND = /^(pick|reword|edit|squash|fixup|drop|p|r|e|s|f|d)\s+([0-9a-f]+)(.*)$/i;
 
 if (path.basename(targetPath) !== 'git-rebase-todo') {
-  const donePath = process.env.GIT_WORKBENCH_REBASE_DONE;
+  const donePath = process.env.BRANCHBRACE_REBASE_DONE;
   const done = donePath ? await readFile(donePath, 'utf8').catch(() => '') : '';
   const current = done.split('\n').map((line) => COMMAND.exec(line.trim())).filter(Boolean).at(-1);
   const item = current && plan.find((step) => step.hash.startsWith(current[2]) && typeof step.message === 'string');

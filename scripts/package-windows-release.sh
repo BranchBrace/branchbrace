@@ -15,7 +15,7 @@ if [ -z "$version" ]; then
   version="$(node -e "console.log(require('./package.json').version)")+$(git rev-parse --short HEAD)"
 fi
 
-image="${GIT_WORKBENCH_WIN_BUILD_IMAGE:-electronuserland/builder:wine}"
+image="${BRANCHBRACE_WIN_BUILD_IMAGE:-electronuserland/builder:wine}"
 
 # The image runs as root, so files it writes into the bind-mounted artifacts/
 # directory are root-owned on the host. Chown them back to the invoking user

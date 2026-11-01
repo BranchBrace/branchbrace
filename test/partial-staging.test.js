@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitService, GitWorkbenchError } from '../src/git.js';
+import { GitService, BranchBraceError } from '../src/git.js';
 
 // Indexation partielle (A3) : chaque test part d'un dépôt réel, choisit des lignes comme le ferait la vue de diff
 // Monaco, puis vérifie octet par octet le contenu de l'index, l'absence de tout autre changement indexé et
@@ -17,7 +17,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t, files, { autocrlf = 'false' } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-partial-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-partial-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');
@@ -230,7 +230,7 @@ test('an outdated or empty selection is refused and the index stays byte-identic
   await write('file.txt', 'a\nB\nc\n');
   const diff = await view(service, 'file.txt');
   const indexBefore = await readFile(path.join(repo, '.git', 'index'));
-  await assert.rejects(service.stageLines('file.txt', diff.request({})), (error) => error instanceof GitWorkbenchError && error.code === 'nothing-selected');
+  await assert.rejects(service.stageLines('file.txt', diff.request({})), (error) => error instanceof BranchBraceError && error.code === 'nothing-selected');
   await write('file.txt', 'a\nB\nc\nd\n');
   await assert.rejects(service.stageLines('file.txt', diff.hunk(0)), (error) => error.code === 'diff-outdated');
   const lying = { ...diff.hunk(0), changes: [{ originalStart: 1, originalCount: 1, modifiedStart: 1, modifiedCount: 1 }], modified: 'a\nB\nc\nd\n' };

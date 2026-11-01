@@ -14,7 +14,7 @@ function git(cwd, ...args) {
 
 // Dépôt avec un commit initial et un remote bare local « origin » qui a reçu main.
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-refs-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-refs-'));
   const repo = path.join(root, 'repository');
   const bare = path.join(root, 'remote.git');
   await mkdir(repo);

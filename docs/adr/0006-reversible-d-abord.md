@@ -17,7 +17,7 @@ Le MVP interdisait toute opération destructive (reset, discard, suppression de 
 2. une confirmation ;
 3. un point de reprise enregistré *avant* d'agir.
 
-Le point de reprise étend les refs `refs/git-workbench/recovery/*` déjà utilisées pour l'amend, le cherry-pick et le rebase. Quand l'opération touche le working tree (reset hard, discard), il enregistre aussi les modifications non commitées, avec `git stash create` pour ne pas toucher à la pile de stash.
+Le point de reprise étend les refs `refs/branchbrace/recovery/*` déjà utilisées pour l'amend, le cherry-pick et le rebase. Quand l'opération touche le working tree (reset hard, discard), il enregistre aussi les modifications non commitées, avec `git stash create` pour ne pas toucher à la pile de stash.
 
 L'Undo restaure le dernier point de reprise. Le Redo restaure l'état enregistré au moment de l'Undo. Les deux restent limités au dépôt local et ne réécrivent jamais un commit déjà poussé.
 

@@ -7,7 +7,7 @@
 
 ## Décision
 
-Livrer le MVP Linux x64 sous forme de paquet Debian (`.deb`, cible electron-builder `deb`, arch `x64`), produit par `npm run package:linux`. Le paquet installe l’application dans `/opt/Git Workbench`, le lanceur `/usr/bin/git-workbench` (via `update-alternatives`) et l’entrée de bureau `git-workbench.desktop`; il déclare `git` en dépendance, puisque l’application pilote le Git CLI installé. `apt purge` le désinstalle proprement.
+Livrer le MVP Linux x64 sous forme de paquet Debian (`.deb`, cible electron-builder `deb`, arch `x64`), produit par `npm run package:linux`. Le paquet installe l’application dans `/opt/BranchBrace`, le lanceur `/usr/bin/branchbrace` (via `update-alternatives`) et l’entrée de bureau `branchbrace.desktop`; il déclare `git` en dépendance, puisque l’application pilote le Git CLI installé. `apt purge` le désinstalle proprement.
 
 `npm run build` (CI) reste `electron-builder --dir` : la CI vérifie la compilation et l’empaquetage sans produire ni téléverser d’artefact, conformément aux règles du dépôt.
 

@@ -43,12 +43,12 @@ function sanitizedEnv(extra = {}, unset = []) {
 // Identité des commits internes d'un point de reprise : jamais affichés ni poussés, ils ne doivent pas échouer dans
 // un dépôt sans user.name ni user.email.
 const RECOVERY_IDENTITY = {
-  GIT_AUTHOR_NAME: 'Git Workbench',
-  GIT_AUTHOR_EMAIL: 'git-workbench@localhost',
-  GIT_COMMITTER_NAME: 'Git Workbench',
-  GIT_COMMITTER_EMAIL: 'git-workbench@localhost',
+  GIT_AUTHOR_NAME: 'BranchBrace',
+  GIT_AUTHOR_EMAIL: 'branchbrace@localhost',
+  GIT_COMMITTER_NAME: 'BranchBrace',
+  GIT_COMMITTER_EMAIL: 'branchbrace@localhost',
 };
-const RECOVERY_STATE = 'refs/git-workbench/recovery-state';
+const RECOVERY_STATE = 'refs/branchbrace/recovery-state';
 // Horodatage strictement croissant : il ordonne les points de reprise, même créés dans la même milliseconde.
 let lastRecoveryTime = 0;
 
@@ -85,7 +85,7 @@ function runGit(cwd, args, options = {}) {
       if (settled) return;
       settled = true;
       child.kill('SIGTERM');
-      reject(new GitWorkbenchError('git-output-too-large'));
+      reject(new BranchBraceError('git-output-too-large'));
     };
     child.stdout.on('data', (chunk) => {
       stdoutLength += chunk.length;
@@ -100,7 +100,7 @@ function runGit(cwd, args, options = {}) {
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
-      reject(new GitWorkbenchError(error.code === 'ENOENT' ? 'git-missing' : 'git-launch-failed'));
+      reject(new BranchBraceError(error.code === 'ENOENT' ? 'git-missing' : 'git-launch-failed'));
     });
     child.on('close', (code) => {
       if (settled) return;
@@ -108,7 +108,7 @@ function runGit(cwd, args, options = {}) {
       // `encoding: 'latin1'` garde les octets exacts (un caractère par octet), quel que soit l'encodage du fichier.
       const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
-      reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
+      reject(new BranchBraceError(classifyFailure(args, result.stderr)));
     });
   });
 }
@@ -132,10 +132,10 @@ function classifyFailure(allArgs, stderr) {
   return 'git-operation-failed';
 }
 
-export class GitWorkbenchError extends Error {
+export class BranchBraceError extends Error {
   constructor(code, recoveryRef = null, operation = null) {
     super(recoveryRef ? `${code}; recovery=${recoveryRef}; abort with git ${operation} --abort` : code);
-    this.name = 'GitWorkbenchError';
+    this.name = 'BranchBraceError';
     this.code = code;
     this.recoveryRef = recoveryRef;
     this.operation = operation;
@@ -270,9 +270,9 @@ export function redactRemoteUrl(url) {
 // URL saisie pour un remote. Les identifiants sont refusés (A10) : ils resteraient en clair dans .git/config. Les
 // transports ext:: et fd:: lancent une commande ou lisent un descripteur : jamais utiles à un remote saisi ici.
 function validateRemoteUrl(url) {
-  if (typeof url !== 'string' || !url || url !== url.trim() || url.length > 2048 || url.startsWith('-') || /[\0\r\n]/.test(url)) throw new GitWorkbenchError('invalid-remote-url');
-  if (/^(?:ext|fd)::/i.test(url)) throw new GitWorkbenchError('invalid-remote-url');
-  if (remoteUrlHasCredentials(url)) throw new GitWorkbenchError('remote-url-credentials');
+  if (typeof url !== 'string' || !url || url !== url.trim() || url.length > 2048 || url.startsWith('-') || /[\0\r\n]/.test(url)) throw new BranchBraceError('invalid-remote-url');
+  if (/^(?:ext|fd)::/i.test(url)) throw new BranchBraceError('invalid-remote-url');
+  if (remoteUrlHasCredentials(url)) throw new BranchBraceError('remote-url-credentials');
 }
 
 // Deux chemins désignent-ils le même dossier ? Git écrit « C:/x » sous Windows, où la casse ne compte pas.
@@ -414,7 +414,7 @@ export class GitService {
     try {
       raw = await runGit(this.repositoryPath, [
         'log', '--date-order', '-n', String(limit), '--branches', '--remotes', '--tags', 'HEAD',
-        '--decorate=full', '--decorate-refs-exclude=refs/git-workbench/*',
+        '--decorate=full', '--decorate-refs-exclude=refs/branchbrace/*',
         '--format=%H%x00%P%x00%an%x00%at%x00%D%x00%b%x00%s%x1e',
       ]);
     } catch (error) {
@@ -451,7 +451,7 @@ export class GitService {
     await this.#ensureRepositoryPath();
     const hash = await this.#resolveCommit(revision);
     const entry = (await this.#commitFiles(hash)).find((file) => file.path === filePath);
-    if (!entry) throw new GitWorkbenchError('file-not-in-commit');
+    if (!entry) throw new BranchBraceError('file-not-in-commit');
     const paths = entry.originalPath ? [entry.originalPath, filePath] : [filePath];
     return runGit(this.repositoryPath, ['show', '--format=', '--no-ext-diff', '--no-color', '-M', '--diff-merges=first-parent', hash, '--', ...paths]);
   }
@@ -502,12 +502,12 @@ export class GitService {
 
   async commit(message) {
     await this.#ensureRepositoryPath();
-    if (typeof message !== 'string' || !message.trim()) throw new GitWorkbenchError('commit-message-required');
+    if (typeof message !== 'string' || !message.trim()) throw new BranchBraceError('commit-message-required');
     const staged = await runGit(this.repositoryPath, ['diff', '--cached', '--quiet']).then(() => false).catch((error) => {
       if (error.code === 'git-operation-failed') return true;
       throw error;
     });
-    if (!staged) throw new GitWorkbenchError('nothing-staged');
+    if (!staged) throw new BranchBraceError('nothing-staged');
     await runGit(this.repositoryPath, ['commit', '-m', message]);
     return runGit(this.repositoryPath, ['rev-parse', 'HEAD']).then((hash) => hash.trim());
   }
@@ -524,10 +524,10 @@ export class GitService {
   // HEAD. Cette copie est le « lease » : le push forcé n'écrase la branche distante que si elle pointe encore dessus.
   async forcePushPreview(expectedUpstream) {
     await this.#ensureRepositoryPath();
-    if (!expectedUpstream) throw new GitWorkbenchError('upstream-missing');
+    if (!expectedUpstream) throw new BranchBraceError('upstream-missing');
     const { upstream } = await this.#upstreamTarget(expectedUpstream);
     const lease = (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', `refs/remotes/${upstream}^{commit}`]).catch(() => '')).trim();
-    if (!lease) throw new GitWorkbenchError('upstream-missing');
+    if (!lease) throw new BranchBraceError('upstream-missing');
     const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
     const [raw, count] = await Promise.all([
       runGit(this.repositoryPath, ['log', '-n', '50', '--format=%H%x00%h%x00%an%x00%s', `${head}..${lease}`]),
@@ -544,39 +544,39 @@ export class GitService {
   // branche distante a bougé depuis `lease`, Git refuse et rien n'est écrasé. Jamais lancé en repli d'un push refusé.
   async forcePush(expectedUpstream, lease) {
     await this.#ensureRepositoryPath();
-    if (!expectedUpstream) throw new GitWorkbenchError('upstream-missing');
-    if (typeof lease !== 'string' || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(lease)) throw new GitWorkbenchError('invalid-revision');
+    if (!expectedUpstream) throw new BranchBraceError('upstream-missing');
+    if (typeof lease !== 'string' || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(lease)) throw new BranchBraceError('invalid-revision');
     const { upstream, remote, branch } = await this.#upstreamTarget(expectedUpstream);
     const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
     const target = `refs/heads/${branch}`;
     // Aucun point de reprise n'existe côté serveur : celui-ci garde ici les commits distants que le push va remplacer.
-    const recoveryRef = `refs/git-workbench/recovery/force-push-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const recoveryRef = `refs/branchbrace/recovery/force-push-${Date.now()}-${randomUUID().slice(0, 8)}`;
     await runGit(this.repositoryPath, ['update-ref', recoveryRef, lease]);
     // --porcelain : l'issue de la ref se lit sur stdout (« ! » = refusée, « (stale info) » = lease périmé). Git sort
     // alors en 1 ; une coupure réseau sort en 128 et reste indéterminée. Le succès n'est retenu qu'après relecture distante.
     const output = await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=${target}:${lease}`, remote, `HEAD:${target}`], { acceptExitCodes: [1] })
-      .catch((error) => { throw new GitWorkbenchError(error.code, recoveryRef); });
+      .catch((error) => { throw new BranchBraceError(error.code, recoveryRef); });
     const [flag, , summary = ''] = output.split('\n').map((line) => line.split('\t')).find((fields) => fields[1]?.endsWith(`:${target}`)) || [];
-    if (!flag) throw new GitWorkbenchError('push-indeterminate', recoveryRef);
+    if (!flag) throw new BranchBraceError('push-indeterminate', recoveryRef);
     if (flag === '!') {
       await runGit(this.repositoryPath, ['update-ref', '-d', recoveryRef]);
-      throw new GitWorkbenchError(summary.includes('stale info') ? 'force-push-stale' : 'push-rejected');
+      throw new BranchBraceError(summary.includes('stale info') ? 'force-push-stale' : 'push-rejected');
     }
-    const hash = await this.#verifyRemoteBranch(remote, branch, head).catch((error) => { throw new GitWorkbenchError(error.code, recoveryRef); });
+    const hash = await this.#verifyRemoteBranch(remote, branch, head).catch((error) => { throw new BranchBraceError(error.code, recoveryRef); });
     return { upstream, hash, previous: lease, recoveryRef };
   }
 
   // Upstream de la branche courante, découpé en remote et branche distante ; refusé s'il diffère de celui affiché.
   async #upstreamTarget(expectedUpstream) {
     const upstream = (await runGit(this.repositoryPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']).catch((error) => {
-      if (error.code === 'git-operation-failed') throw new GitWorkbenchError('upstream-missing');
+      if (error.code === 'git-operation-failed') throw new BranchBraceError('upstream-missing');
       throw error;
     })).trim();
-    if (expectedUpstream && upstream !== expectedUpstream) throw new GitWorkbenchError('upstream-changed');
+    if (expectedUpstream && upstream !== expectedUpstream) throw new BranchBraceError('upstream-changed');
     const currentBranch = (await runGit(this.repositoryPath, ['branch', '--show-current'])).trim();
-    if (!currentBranch) throw new GitWorkbenchError('upstream-missing');
+    if (!currentBranch) throw new BranchBraceError('upstream-missing');
     const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${currentBranch}.remote`])).trim();
-    if (!remote || !upstream.startsWith(`${remote}/`)) throw new GitWorkbenchError('upstream-missing');
+    if (!remote || !upstream.startsWith(`${remote}/`)) throw new BranchBraceError('upstream-missing');
     return { upstream, remote, branch: upstream.slice(remote.length + 1) };
   }
 
@@ -584,7 +584,7 @@ export class GitService {
   async #verifyRemoteBranch(remote, branch, expected) {
     const remoteRef = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]);
     const actual = remoteRef.trim().split(/\s+/)[0];
-    if (!actual || actual !== expected) throw new GitWorkbenchError('push-verification-failed');
+    if (!actual || actual !== expected) throw new BranchBraceError('push-verification-failed');
     return actual;
   }
 
@@ -604,7 +604,7 @@ export class GitService {
     await this.#ensureRepositoryPath();
     await this.#validateRemoteName(name);
     validateRemoteUrl(url);
-    if ((await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-exists');
+    if ((await this.remotes()).some((item) => item.name === name)) throw new BranchBraceError('remote-exists');
     await runGit(this.repositoryPath, ['remote', 'add', '--', name, url]);
     return this.remotes();
   }
@@ -614,8 +614,8 @@ export class GitService {
     await this.#ensureRepositoryPath();
     await this.#validateRemoteName(newName);
     const remotes = await this.remotes();
-    if (!remotes.some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
-    if (remotes.some((item) => item.name === newName)) throw new GitWorkbenchError('remote-exists');
+    if (!remotes.some((item) => item.name === name)) throw new BranchBraceError('remote-not-found');
+    if (remotes.some((item) => item.name === newName)) throw new BranchBraceError('remote-exists');
     await runGit(this.repositoryPath, ['remote', 'rename', '--', name, newName]);
     return this.remotes();
   }
@@ -623,7 +623,7 @@ export class GitService {
   async setRemoteUrl(name, url) {
     await this.#ensureRepositoryPath();
     validateRemoteUrl(url);
-    if (!(await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
+    if (!(await this.remotes()).some((item) => item.name === name)) throw new BranchBraceError('remote-not-found');
     await runGit(this.repositoryPath, ['remote', 'set-url', '--', name, url]);
     return this.remotes();
   }
@@ -631,15 +631,15 @@ export class GitService {
   // Retire le remote de la configuration et ses branches distantes de cet ordinateur ; rien ne change sur le serveur.
   async removeRemote(name) {
     await this.#ensureRepositoryPath();
-    if (!(await this.remotes()).some((item) => item.name === name)) throw new GitWorkbenchError('remote-not-found');
+    if (!(await this.remotes()).some((item) => item.name === name)) throw new BranchBraceError('remote-not-found');
     await runGit(this.repositoryPath, ['remote', 'remove', '--', name]);
     return this.remotes();
   }
 
   // Même règle que Git (« refs/remotes/<nom>/… » doit être une référence valide), sans laisser un nom passer pour une option.
   async #validateRemoteName(name) {
-    if (typeof name !== 'string' || !name || name !== name.trim() || name.length > 255 || name.startsWith('-') || /[\0\s]/.test(name)) throw new GitWorkbenchError('invalid-remote-name');
-    await runGit(this.repositoryPath, ['check-ref-format', `refs/remotes/${name}/test`]).catch(() => { throw new GitWorkbenchError('invalid-remote-name'); });
+    if (typeof name !== 'string' || !name || name !== name.trim() || name.length > 255 || name.startsWith('-') || /[\0\s]/.test(name)) throw new BranchBraceError('invalid-remote-name');
+    await runGit(this.repositoryPath, ['check-ref-format', `refs/remotes/${name}/test`]).catch(() => { throw new BranchBraceError('invalid-remote-name'); });
   }
 
   async branches() {
@@ -670,9 +670,9 @@ export class GitService {
     await this.#checkBranchName(newName);
     const { local } = await this.references();
     const branch = local.find((item) => item.name === oldName);
-    if (!branch) throw new GitWorkbenchError('branch-not-found');
+    if (!branch) throw new BranchBraceError('branch-not-found');
     if (oldName === newName) return { branch: newName, remote: null };
-    if (local.some((item) => item.name === newName)) throw new GitWorkbenchError('branch-name-taken');
+    if (local.some((item) => item.name === newName)) throw new BranchBraceError('branch-name-taken');
     const target = remote ? await this.#remoteRenameTarget(branch, newName) : null;
     await runGit(this.repositoryPath, ['branch', '-m', '--', oldName, newName]);
     if (!target) return { branch: newName, remote: null };
@@ -685,7 +685,7 @@ export class GitService {
       // `<remote>/<nom>`, absent d'un clone single-branch.
       await runGit(this.repositoryPath, ['config', `branch.${newName}.remote`, target.remote]);
       await runGit(this.repositoryPath, ['config', `branch.${newName}.merge`, `refs/heads/${newName}`]);
-    } catch { throw new GitWorkbenchError('remote-rename-publish-failed'); }
+    } catch { throw new BranchBraceError('remote-rename-publish-failed'); }
     const renamed = { name: target.remote, from: target.branch, to: newName };
     try {
       await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=refs/heads/${target.branch}:${branch.hash}`, target.remote, `:refs/heads/${target.branch}`]);
@@ -696,19 +696,19 @@ export class GitService {
   // Branche distante à renommer avec la locale : elle doit exister, pointer sur le même commit (sinon des commits
   // seraient d'un seul côté) et le nouveau nom doit être libre sur le serveur.
   async #remoteRenameTarget(branch, newName) {
-    if (!branch.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+    if (!branch.upstream || branch.gone) throw new BranchBraceError('upstream-missing');
     const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.remote`], { acceptExitCodes: [1] })).trim();
     const merge = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.merge`], { acceptExitCodes: [1] })).trim();
-    if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) throw new GitWorkbenchError('upstream-missing');
+    if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) throw new BranchBraceError('upstream-missing');
     const target = { remote, branch: merge.slice(11) };
     const [current, taken] = await Promise.all([this.#remoteHead(remote, target.branch), this.#remoteHead(remote, newName)]);
-    if (current !== branch.hash) throw new GitWorkbenchError('remote-rename-diverged');
-    if (taken) throw new GitWorkbenchError('branch-name-taken-remote');
+    if (current !== branch.hash) throw new BranchBraceError('remote-rename-diverged');
+    if (taken) throw new BranchBraceError('branch-name-taken-remote');
     return target;
   }
 
   async #remoteHead(remote, branch) {
-    const raw = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]).catch(() => { throw new GitWorkbenchError('fetch-failed'); });
+    const raw = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]).catch(() => { throw new BranchBraceError('fetch-failed'); });
     return raw.split('\n').map((line) => line.split(/\s+/)).find(([, ref]) => ref === `refs/heads/${branch}`)?.[0] ?? null;
   }
 
@@ -716,8 +716,8 @@ export class GitService {
   // qu'on refuse : le nom saisi doit être exactement celui qui sera créé.
   async #checkBranchName(name) {
     this.#validateBranchName(name);
-    const checked = await runGit(this.repositoryPath, ['check-ref-format', '--branch', name]).catch(() => { throw new GitWorkbenchError('invalid-branch-name'); });
-    if (checked.trim() !== name) throw new GitWorkbenchError('invalid-branch-name');
+    const checked = await runGit(this.repositoryPath, ['check-ref-format', '--branch', name]).catch(() => { throw new BranchBraceError('invalid-branch-name'); });
+    if (checked.trim() !== name) throw new BranchBraceError('invalid-branch-name');
   }
 
   // `-z` n'existe que depuis Git 2.36 : sans lui, la sortie ligne à ligne est lue à la place. Si Git ne sait pas du
@@ -737,20 +737,20 @@ export class GitService {
   // une nouvelle branche créée depuis `startPoint` (HEAD par défaut).
   async addWorktree(target, { branch, newBranch = false, startPoint = null } = {}) {
     await this.#ensureRepositoryPath();
-    if (typeof target !== 'string' || !target || target.includes('\0') || !path.isAbsolute(target)) throw new GitWorkbenchError('invalid-path');
+    if (typeof target !== 'string' || !target || target.includes('\0') || !path.isAbsolute(target)) throw new BranchBraceError('invalid-path');
     const destination = path.resolve(target);
     // Une worktree imbriquée dans une autre y apparaîtrait comme un dossier non suivi (et serait committable).
-    if ((await this.worktrees()).some((item) => isInside(destination, item.path))) throw new GitWorkbenchError('worktree-path-inside-worktree');
-    if (existsSync(destination) && (await readdir(destination).catch(() => { throw new GitWorkbenchError('worktree-path-exists'); })).length) throw new GitWorkbenchError('worktree-path-exists');
+    if ((await this.worktrees()).some((item) => isInside(destination, item.path))) throw new BranchBraceError('worktree-path-inside-worktree');
+    if (existsSync(destination) && (await readdir(destination).catch(() => { throw new BranchBraceError('worktree-path-exists'); })).length) throw new BranchBraceError('worktree-path-exists');
     if (newBranch) {
       await this.#checkBranchName(branch);
-      if ((await this.branches()).some((item) => item.name === branch)) throw new GitWorkbenchError('branch-name-taken');
+      if ((await this.branches()).some((item) => item.name === branch)) throw new BranchBraceError('branch-name-taken');
       const base = startPoint ? await this.#resolveCommit(startPoint) : 'HEAD';
       await runGit(this.repositoryPath, ['worktree', 'add', '--quiet', '-b', branch, '--', destination, base]);
     } else {
       this.#validateBranchName(branch);
-      if (!(await this.branches()).some((item) => item.name === branch)) throw new GitWorkbenchError('branch-not-found');
-      if ((await this.worktrees()).some((item) => item.branch === branch)) throw new GitWorkbenchError('branch-in-other-worktree');
+      if (!(await this.branches()).some((item) => item.name === branch)) throw new BranchBraceError('branch-not-found');
+      if ((await this.worktrees()).some((item) => item.branch === branch)) throw new BranchBraceError('branch-in-other-worktree');
       await runGit(this.repositoryPath, ['worktree', 'add', '--quiet', '--', destination, branch]);
     }
     return { path: destination, branch };
@@ -762,10 +762,10 @@ export class GitService {
   // worktree sur un disque momentanément débranché).
   async removeWorktree(target) {
     const worktree = (await this.worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
-    if (!worktree) throw new GitWorkbenchError('worktree-not-found');
-    if (worktree.main) throw new GitWorkbenchError('worktree-main');
-    if (worktree.current) throw new GitWorkbenchError('worktree-current');
-    if (worktree.locked) throw new GitWorkbenchError('worktree-locked');
+    if (!worktree) throw new BranchBraceError('worktree-not-found');
+    if (worktree.main) throw new BranchBraceError('worktree-main');
+    if (worktree.current) throw new BranchBraceError('worktree-current');
+    if (worktree.locked) throw new BranchBraceError('worktree-locked');
     if (worktree.prunable) await this.#forgetWorktree(worktree.path);
     else await runGit(this.repositoryPath, ['worktree', 'remove', '--', worktree.path]);
     return this.worktrees();
@@ -774,7 +774,7 @@ export class GitService {
   // Efface `.git/worktrees/<id>` de la seule worktree introuvable visée : celle dont le fichier `gitdir` désigne
   // `<chemin>/.git`. Refusé si son dossier est de nouveau présent.
   async #forgetWorktree(worktreePath) {
-    if (existsSync(worktreePath)) throw new GitWorkbenchError('worktree-not-found');
+    if (existsSync(worktreePath)) throw new BranchBraceError('worktree-not-found');
     const common = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-common-dir'])).trim());
     const admin = path.join(common, 'worktrees');
     for (const entry of await readdir(admin).catch(() => [])) {
@@ -783,7 +783,7 @@ export class GitService {
       await rm(path.join(admin, entry), { recursive: true, force: true });
       return;
     }
-    throw new GitWorkbenchError('worktree-not-found');
+    throw new BranchBraceError('worktree-not-found');
   }
 
   async pruneWorktrees() {
@@ -834,8 +834,8 @@ export class GitService {
     await this.#ensureRepositoryPath();
     this.#validateBranchName(name);
     const branches = await this.branches();
-    if (!branches.some((branch) => branch.name === name)) throw new GitWorkbenchError('branch-not-found');
-    if ((await this.worktrees()).some((item) => item.branch === name && !item.current)) throw new GitWorkbenchError('branch-in-other-worktree');
+    if (!branches.some((branch) => branch.name === name)) throw new BranchBraceError('branch-not-found');
+    if ((await this.worktrees()).some((item) => item.branch === name && !item.current)) throw new BranchBraceError('branch-in-other-worktree');
     await runGit(this.repositoryPath, ['switch', name]);
     return this.status();
   }
@@ -845,8 +845,8 @@ export class GitService {
     await this.#ensureRepositoryPath();
     const { local, remote } = await this.references();
     const target = remote.find((item) => item.name === remoteName);
-    if (!target) throw new GitWorkbenchError('branch-not-found');
-    if (local.some((item) => item.name === target.branch)) throw new GitWorkbenchError('branch-exists');
+    if (!target) throw new BranchBraceError('branch-not-found');
+    if (local.some((item) => item.name === target.branch)) throw new BranchBraceError('branch-exists');
     await runGit(this.repositoryPath, ['switch', '--track', target.name]);
     return this.status();
   }
@@ -856,8 +856,8 @@ export class GitService {
     await this.#ensureRepositoryPath();
     await this.#checkRefName('refs/tags/', name, 'invalid-tag-name');
     const hash = await this.#resolveCommit(commit);
-    if (annotated && (typeof message !== 'string' || !message.trim())) throw new GitWorkbenchError('tag-message-required');
-    if (await this.#refExists(`refs/tags/${name}`)) throw new GitWorkbenchError('tag-exists');
+    if (annotated && (typeof message !== 'string' || !message.trim())) throw new BranchBraceError('tag-message-required');
+    if (await this.#refExists(`refs/tags/${name}`)) throw new BranchBraceError('tag-exists');
     await runGit(this.repositoryPath, annotated ? ['tag', '--annotate', '--message', message, name, hash] : ['tag', name, hash]);
     return { name, hash, annotated: Boolean(annotated) };
   }
@@ -867,13 +867,13 @@ export class GitService {
     await this.#ensureRepositoryPath();
     await this.#checkRefName('refs/tags/', name, 'invalid-tag-name');
     const remotes = (await runGit(this.repositoryPath, ['remote'])).split('\n').filter(Boolean);
-    if (typeof remote !== 'string' || !remotes.includes(remote)) throw new GitWorkbenchError('remote-not-found');
-    if (!await this.#refExists(`refs/tags/${name}`)) throw new GitWorkbenchError('tag-not-found');
+    if (typeof remote !== 'string' || !remotes.includes(remote)) throw new BranchBraceError('remote-not-found');
+    if (!await this.#refExists(`refs/tags/${name}`)) throw new BranchBraceError('tag-not-found');
     const object = (await runGit(this.repositoryPath, ['rev-parse', '--verify', `refs/tags/${name}`])).trim();
     await runGit(this.repositoryPath, ['push', '--porcelain', remote, `refs/tags/${name}`]);
     const remoteRef = await runGit(this.repositoryPath, ['ls-remote', '--tags', remote, `refs/tags/${name}`]);
     const actual = remoteRef.split('\n').map((line) => line.split(/\s+/)).find(([, ref]) => ref === `refs/tags/${name}`)?.[0];
-    if (actual !== object) throw new GitWorkbenchError('push-verification-failed');
+    if (actual !== object) throw new BranchBraceError('push-verification-failed');
     return { name, remote, hash: actual };
   }
 
@@ -882,17 +882,17 @@ export class GitService {
   async revert(commit, mainline = null) {
     await this.#ensureRepositoryPath();
     const hash = await this.#resolveCommit(commit);
-    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    if (await this.operation()) throw new BranchBraceError('operation-in-progress');
     await this.#assertClean();
     const parents = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
     const args = ['revert', '--no-edit'];
     if (parents.length > 1) {
-      if (!Number.isInteger(mainline) || mainline < 1 || mainline > parents.length) throw new GitWorkbenchError('revert-mainline-required');
+      if (!Number.isInteger(mainline) || mainline < 1 || mainline > parents.length) throw new BranchBraceError('revert-mainline-required');
       args.push('-m', String(mainline));
-    } else if (mainline !== null) throw new GitWorkbenchError('revert-mainline-invalid');
+    } else if (mainline !== null) throw new BranchBraceError('revert-mainline-invalid');
     const recoveryRef = await this.#saveRecoveryRef('revert');
     try { await runGit(this.repositoryPath, [...args, hash], { env: { GIT_EDITOR: 'true' } }); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'revert'); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', recoveryRef, 'revert'); }
     const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
     return { hash: head, recoveryRef, status: await this.status() };
   }
@@ -913,8 +913,8 @@ export class GitService {
   // Remplace le dernier commit par l'index courant et ce message. Un point de récupération garde l'ancien commit.
   async amend(message) {
     await this.#ensureRepositoryPath();
-    if (typeof message !== 'string' || !message.trim()) throw new GitWorkbenchError('commit-message-required');
-    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    if (typeof message !== 'string' || !message.trim()) throw new BranchBraceError('commit-message-required');
+    if (await this.operation()) throw new BranchBraceError('operation-in-progress');
     const recoveryRef = await this.#saveRecoveryRef('amend');
     await runGit(this.repositoryPath, ['commit', '--amend', '-m', message]);
     const hash = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
@@ -942,7 +942,7 @@ export class GitService {
     await this.#ensureRepositoryPath();
     const hash = await this.#resolveCommit(revision);
     const entry = (await this.#commitFiles(hash)).find((file) => file.path === filePath);
-    if (!entry) throw new GitWorkbenchError('file-not-in-commit');
+    if (!entry) throw new BranchBraceError('file-not-in-commit');
     const parent = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ')[1];
     const [original, modified] = await Promise.all([
       parent && entry.status !== 'A' ? this.#blob(`${parent}:${entry.originalPath || filePath}`) : null,
@@ -961,7 +961,7 @@ export class GitService {
   async readWorkingFile(filePath) {
     const absolute = await this.#workingPath(filePath);
     const info = await stat(absolute);
-    if (!info.isFile()) throw new GitWorkbenchError('invalid-path');
+    if (!info.isFile()) throw new BranchBraceError('invalid-path');
     if (info.size > MAX_EDITABLE) return { tooLarge: true, binary: false, content: null };
     const content = await readFile(absolute, 'utf8');
     return isBinary(content) ? { binary: true, content: null } : { binary: false, content };
@@ -969,9 +969,9 @@ export class GitService {
 
   // N'écrit que dans un fichier texte existant du dépôt : l'éditeur ne crée ni ne supprime de fichier.
   async writeWorkingFile(filePath, content) {
-    if (typeof content !== 'string') throw new GitWorkbenchError('invalid-content');
+    if (typeof content !== 'string') throw new BranchBraceError('invalid-content');
     const current = await this.readWorkingFile(filePath);
-    if (current.binary || current.tooLarge) throw new GitWorkbenchError('file-not-editable');
+    if (current.binary || current.tooLarge) throw new BranchBraceError('file-not-editable');
     await writeFile(await this.#workingPath(filePath), content, 'utf8');
     return this.status();
   }
@@ -979,7 +979,7 @@ export class GitService {
   // Les trois versions d'un fichier en conflit (base commune, côté courant, côté entrant) et le fichier avec marqueurs.
   async conflictVersions(filePath) {
     const entry = await this.#statusEntry(filePath);
-    if (!entry.conflicted) throw new GitWorkbenchError('file-not-in-conflict');
+    if (!entry.conflicted) throw new BranchBraceError('file-not-in-conflict');
     const [base, ours, theirs, working, operation] = await Promise.all([
       this.#blob(`:1:${filePath}`), this.#blob(`:2:${filePath}`), this.#blob(`:3:${filePath}`),
       this.readWorkingFile(filePath).catch(() => null), this.operation(),
@@ -995,9 +995,9 @@ export class GitService {
   // Enregistre la résolution choisie puis marque le fichier résolu (`git add`), ou le supprime si `content` est null.
   async resolveConflict(filePath, content) {
     const entry = await this.#statusEntry(filePath);
-    if (!entry.conflicted) throw new GitWorkbenchError('file-not-in-conflict');
+    if (!entry.conflicted) throw new BranchBraceError('file-not-in-conflict');
     if (content === null) { await runGit(this.repositoryPath, ['rm', '--quiet', '--', filePath]); return this.status(); }
-    if (typeof content !== 'string') throw new GitWorkbenchError('invalid-content');
+    if (typeof content !== 'string') throw new BranchBraceError('invalid-content');
     await writeFile(await this.#workingPath(filePath, { allowMissing: true }), content, 'utf8');
     await runGit(this.repositoryPath, ['add', '--', filePath]);
     return this.status();
@@ -1008,11 +1008,11 @@ export class GitService {
   async continueOperation() {
     const operation = await this.#pendingOperation();
     const status = await this.status();
-    if (status.files.some((file) => file.conflicted)) throw new GitWorkbenchError('conflicts-remaining');
+    if (status.files.some((file) => file.conflicted)) throw new BranchBraceError('conflicts-remaining');
     // Pendant un découpage, Git refuserait de continuer avec des changements non commités : on l'explique avant.
-    if (status.split && status.files.length) throw new GitWorkbenchError('split-changes-remaining');
+    if (status.split && status.files.length) throw new BranchBraceError('split-changes-remaining');
     try { await runGit(this.repositoryPath, [operation, '--continue'], { env: await this.#operationEditors(operation) }); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
     await this.#prepareSplitStop();
     return { operation, status: await this.status() };
@@ -1021,9 +1021,9 @@ export class GitService {
   // Passe le commit en cours de rejeu (rebase, cherry-pick) : ses changements ne seront pas appliqués.
   async skipOperation() {
     const operation = await this.#pendingOperation();
-    if (operation === 'merge') throw new GitWorkbenchError('operation-cannot-skip');
+    if (operation === 'merge') throw new BranchBraceError('operation-cannot-skip');
     try { await runGit(this.repositoryPath, [operation, '--skip'], { env: await this.#operationEditors(operation) }); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', null, operation); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', null, operation); }
     finally { await this.#cleanupRebasePlan(); }
     await this.#prepareSplitStop();
     return { operation, status: await this.status() };
@@ -1041,7 +1041,7 @@ export class GitService {
     await this.#assertClean();
     const recoveryRef = await this.#saveRecoveryRef('cherry-pick');
     try { await runGit(this.repositoryPath, ['cherry-pick', hash]); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'cherry-pick'); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', recoveryRef, 'cherry-pick'); }
     return { recoveryRef, status: await this.status() };
   }
 
@@ -1050,7 +1050,7 @@ export class GitService {
     await this.#assertClean();
     const recoveryRef = await this.#saveRecoveryRef('rebase');
     try { await runGit(this.repositoryPath, ['rebase', target]); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
     return { recoveryRef, status: await this.status() };
   }
 
@@ -1078,25 +1078,25 @@ export class GitService {
   async interactiveRebase(upstream, plan) {
     const { upstream: target, commits } = await this.interactiveRebaseCommits(upstream);
     await this.#assertClean();
-    if (!Array.isArray(plan) || plan.length !== commits.length || new Set(plan.map((item) => item?.hash)).size !== commits.length) throw new GitWorkbenchError('invalid-rebase-plan');
+    if (!Array.isArray(plan) || plan.length !== commits.length || new Set(plan.map((item) => item?.hash)).size !== commits.length) throw new BranchBraceError('invalid-rebase-plan');
     const validHashes = new Set(commits.map((item) => item.hash));
-    if (plan.some((item) => !validHashes.has(item?.hash) || !REBASE_ACTIONS.includes(item.action))) throw new GitWorkbenchError('invalid-rebase-plan');
+    if (plan.some((item) => !validHashes.has(item?.hash) || !REBASE_ACTIONS.includes(item.action))) throw new BranchBraceError('invalid-rebase-plan');
     // reword et squash portent le message final choisi (celui d'un squash est le message du groupe fusionné).
-    if (plan.some((item) => (item.action === 'reword' || item.action === 'squash') && (typeof item.message !== 'string' || !item.message.trim()))) throw new GitWorkbenchError('invalid-rebase-plan');
+    if (plan.some((item) => (item.action === 'reword' || item.action === 'squash') && (typeof item.message !== 'string' || !item.message.trim()))) throw new BranchBraceError('invalid-rebase-plan');
     let previousCanFixup = false;
     for (const item of plan) {
-      if ((item.action === 'fixup' || item.action === 'squash') && !previousCanFixup) throw new GitWorkbenchError('invalid-rebase-plan');
+      if ((item.action === 'fixup' || item.action === 'squash') && !previousCanFixup) throw new BranchBraceError('invalid-rebase-plan');
       // Une ligne écartée disparaît du todo : un « squash » qui la suit se fond dans le dernier commit gardé.
       if (item.action !== 'drop') previousCanFixup = true;
     }
-    if (plan.every((item) => item.action === 'drop')) throw new GitWorkbenchError('invalid-rebase-plan');
+    if (plan.every((item) => item.action === 'drop')) throw new BranchBraceError('invalid-rebase-plan');
     const steps = plan.map(({ hash, action, message }) => ((action === 'reword' || action === 'squash' || (action === 'fixup' && typeof message === 'string')) ? { hash, action, message } : { hash, action }));
     const recoveryRef = await this.#saveRecoveryRef('interactive-rebase');
     // Le plan reste dans le dossier .git tant que le rebase n'est pas terminé : après un conflit, « Continuer »
     // en a encore besoin pour appliquer les messages des reword/squash restants.
     await writeFile(await this.#rebasePlanPath(), JSON.stringify(steps), { mode: 0o600 });
     try { await runGit(this.repositoryPath, ['rebase', '--interactive', '--no-autosquash', target], { env: { ...await this.#rebaseEditors(), GIT_SEQUENCE_EDITOR: this.#rebaseEditorCommand() } }); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', recoveryRef, 'rebase'); }
     finally { await this.#cleanupRebasePlan(); }
     await this.#prepareSplitStop();
     return { recoveryRef, status: await this.status() };
@@ -1110,11 +1110,11 @@ export class GitService {
     const hash = await this.#resolveCommit(revision);
     const parents = (await runGit(this.repositoryPath, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
     // Un commit racine n'a pas de parent sur lequel s'arrêter, un merge ne se découpe pas en morceaux de diff.
-    if (parents.length !== 1) throw new GitWorkbenchError('split-unsupported');
+    if (parents.length !== 1) throw new BranchBraceError('split-unsupported');
     try { await runGit(this.repositoryPath, ['merge-base', '--is-ancestor', hash, 'HEAD']); }
-    catch { throw new GitWorkbenchError('split-not-on-branch'); }
+    catch { throw new BranchBraceError('split-not-on-branch'); }
     // Le rebase aplatirait les merges qui suivent le commit : on refuse plutôt que de réécrire plus que demandé.
-    if (Number((await runGit(this.repositoryPath, ['rev-list', '--merges', '--count', `${parents[0]}..HEAD`])).trim())) throw new GitWorkbenchError('split-unsupported');
+    if (Number((await runGit(this.repositoryPath, ['rev-list', '--merges', '--count', `${parents[0]}..HEAD`])).trim())) throw new BranchBraceError('split-unsupported');
     const { commits } = await this.interactiveRebaseCommits(parents[0]);
     return this.interactiveRebase(parents[0], commits.map((commit) => ({ hash: commit.hash, action: commit.hash === hash ? 'split' : 'pick' })));
   }
@@ -1169,9 +1169,9 @@ export class GitService {
   // est le commit prévisualisé : si la source a bougé depuis, rien n'est fusionné.
   async merge(source, { fastForward = false, expectedTarget = null } = {}) {
     const preview = await this.mergePreview(source);
-    if (expectedTarget && preview.target !== expectedTarget) throw new GitWorkbenchError('merge-source-changed');
-    if (!preview.branch) throw new GitWorkbenchError('detached-head');
-    if (!preview.total) throw new GitWorkbenchError('nothing-to-merge');
+    if (expectedTarget && preview.target !== expectedTarget) throw new BranchBraceError('merge-source-changed');
+    if (!preview.branch) throw new BranchBraceError('detached-head');
+    if (!preview.total) throw new BranchBraceError('nothing-to-merge');
     await this.#assertClean();
     // Même message que Git (« Merge branch 'x' into main »), mais calculé ici : Git ne voit que le SHA prévisualisé.
     // `source` est déjà validé par #resolveCommit (pas d'option) ; --end-of-options serait recopié tel quel par ce mode.
@@ -1185,7 +1185,7 @@ export class GitService {
     catch (error) {
       // Git annonce un conflit de merge sur la sortie standard : c'est le merge resté en cours qui le signale.
       const code = await this.operation() === 'merge' ? 'conflict' : error.code || 'git-operation-failed';
-      throw new GitWorkbenchError(code, recoveryRef, 'merge');
+      throw new BranchBraceError(code, recoveryRef, 'merge');
     }
     const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
     return { recoveryRef, fastForwarded: head === preview.target, status: await this.status() };
@@ -1200,29 +1200,29 @@ export class GitService {
 
   async #pullNow(expectedUpstream) {
     await this.#ensureRepositoryPath();
-    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    if (await this.operation()) throw new BranchBraceError('operation-in-progress');
     const read = (args) => runGit(this.repositoryPath, args).then((text) => text.trim(), () => '');
     const branch = await read(['branch', '--show-current']);
     const [upstream, remote] = branch
       ? await Promise.all([read(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']), read(['config', '--get', `branch.${branch}.remote`])])
       : ['', ''];
-    if (!upstream || !remote || !upstream.startsWith(`${remote}/`)) throw new GitWorkbenchError('upstream-missing');
-    if (expectedUpstream && upstream !== expectedUpstream) throw new GitWorkbenchError('upstream-changed');
+    if (!upstream || !remote || !upstream.startsWith(`${remote}/`)) throw new BranchBraceError('upstream-missing');
+    if (expectedUpstream && upstream !== expectedUpstream) throw new BranchBraceError('upstream-changed');
     await runGit(this.repositoryPath, ['fetch', '--prune', '--no-recurse-submodules', remote]);
     // Branche supprimée côté serveur : le fetch --prune vient d'en retirer la copie locale.
     const target = await read(['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}']);
-    if (!target) throw new GitWorkbenchError('upstream-missing');
+    if (!target) throw new BranchBraceError('upstream-missing');
     const [ahead, behind] = (await runGit(this.repositoryPath, ['rev-list', '--left-right', '--count', `HEAD...${target}`])).trim().split(/\s+/).map(Number);
     if (!behind || ahead) return { upstream, ahead, behind, pulled: false, diverged: Boolean(behind && ahead), recoveryRef: null };
     const recoveryRef = await this.#saveRecoveryRef('pull');
     try { await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-squash', target]); }
-    catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef); }
+    catch (error) { throw new BranchBraceError(error.code || 'git-operation-failed', recoveryRef); }
     // Succès annoncé seulement si la branche pointe bien sur le commit de l'upstream récupéré.
-    if (await read(['rev-parse', 'HEAD']) !== target) throw new GitWorkbenchError('pull-verification-failed', recoveryRef);
+    if (await read(['rev-parse', 'HEAD']) !== target) throw new BranchBraceError('pull-verification-failed', recoveryRef);
     return { upstream, ahead, behind, pulled: true, diverged: false, recoveryRef };
   }
 
-  async #rebasePlanPath() { return path.join(await this.#gitDirectory(), 'git-workbench-rebase-plan.json'); }
+  async #rebasePlanPath() { return path.join(await this.#gitDirectory(), 'branchbrace-rebase-plan.json'); }
 
   #rebaseEditorCommand() {
     const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -1234,7 +1234,7 @@ export class GitService {
   async #rebaseEditors() {
     const planPath = await this.#rebasePlanPath();
     if (!existsSync(planPath)) return { GIT_EDITOR: 'true' };
-    return { GIT_EDITOR: this.#rebaseEditorCommand(), GIT_WORKBENCH_REBASE_PLAN: planPath, GIT_WORKBENCH_REBASE_DONE: path.join(await this.#gitDirectory(), 'rebase-merge', 'done') };
+    return { GIT_EDITOR: this.#rebaseEditorCommand(), BRANCHBRACE_REBASE_PLAN: planPath, BRANCHBRACE_REBASE_DONE: path.join(await this.#gitDirectory(), 'rebase-merge', 'done') };
   }
 
   async #cleanupRebasePlan() {
@@ -1243,7 +1243,7 @@ export class GitService {
 
   // Contenu d'un blob (`HEAD:chemin`, `:chemin` pour l'index, `:2:chemin` pour un côté de conflit) ; null s'il n'existe pas.
   async #blob(spec, encoding = 'utf8') {
-    if (spec.includes('\0')) throw new GitWorkbenchError('invalid-path');
+    if (spec.includes('\0')) throw new BranchBraceError('invalid-path');
     return runGit(this.repositoryPath, ['cat-file', 'blob', spec], { encoding }).catch((error) => {
       if (error.code === 'git-output-too-large') throw error;
       return null;
@@ -1269,32 +1269,32 @@ export class GitService {
     const absolute = await this.#workingPath(filePath);
     // lstat : un lien symbolique n'est pas un fichier texte à découper en lignes.
     const info = await lstat(absolute);
-    if (!info.isFile() || info.size > MAX_EDITABLE) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (!info.isFile() || info.size > MAX_EDITABLE) throw new BranchBraceError('partial-staging-unsupported');
     const raw = (await readFile(absolute)).toString('latin1');
     const sha = (await runGit(this.repositoryPath, ['hash-object', '-w', '--', filePath])).trim();
     const right = await this.#blob(sha, 'latin1');
     // Un filtre qui change autre chose que les fins de ligne (LFS, ident…) : les lignes affichées ne sont pas celles
     // que Git indexerait.
-    if (right === null || splitLines(raw).texts.join('\n') !== splitLines(right).texts.join('\n')) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (right === null || splitLines(raw).texts.join('\n') !== splitLines(right).texts.join('\n')) throw new BranchBraceError('partial-staging-unsupported');
     const executable = process.platform !== 'win32' && (info.mode & 0o111) !== 0;
     return { left: indexContent, right, displayedRight: raw, fileMode: indexEntry?.mode ?? (executable ? '100755' : '100644') };
   }
 
   async #applyLines(filePath, request, mode) {
     const entry = await this.#statusEntry(filePath);
-    if (entry.conflicted || entry.originalPath) throw new GitWorkbenchError('partial-staging-unsupported');
-    if (typeof request?.original !== 'string' || typeof request?.modified !== 'string') throw new GitWorkbenchError('invalid-content');
+    if (entry.conflicted || entry.originalPath) throw new BranchBraceError('partial-staging-unsupported');
+    if (typeof request?.original !== 'string' || typeof request?.modified !== 'string') throw new BranchBraceError('invalid-content');
     const stage = mode === 'stage';
     const { left, right, displayedRight, fileMode } = await this.#partialSides(filePath, entry, stage);
-    if (isBinary(left) || isBinary(right) || (fileMode !== '100644' && fileMode !== '100755')) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (isBinary(left) || isBinary(right) || (fileMode !== '100644' && fileMode !== '100755')) throw new BranchBraceError('partial-staging-unsupported');
     // Le diff affiché doit être exactement celui du disque : sinon les numéros de ligne choisis ne désignent plus rien.
     const decode = (text) => Buffer.from(text ?? '', 'latin1').toString('utf8');
-    if (decode(left) !== request.original || decode(displayedRight) !== request.modified) throw new GitWorkbenchError('diff-outdated');
+    if (decode(left) !== request.original || decode(displayedRight) !== request.modified) throw new BranchBraceError('diff-outdated');
     let plan;
     try {
       plan = buildPartialPatch({ path: filePath, mode, left, right, changes: request.changes, selection: request.selection, fileMode });
     } catch (error) {
-      if (error instanceof PartialStagingError) throw new GitWorkbenchError(error.code);
+      if (error instanceof PartialStagingError) throw new BranchBraceError(error.code);
       throw error;
     }
 
@@ -1302,7 +1302,7 @@ export class GitService {
     const indexPath = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-path', 'index'])).trim());
     const before = await this.#stagedRecords();
     const backup = await readFile(indexPath).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-    const patchPath = path.join(gitDirectory, `git-workbench-partial-${randomUUID()}.patch`);
+    const patchPath = path.join(gitDirectory, `branchbrace-partial-${randomUUID()}.patch`);
     await writeFile(patchPath, Buffer.from(plan.patch, 'latin1'), { mode: 0o600 });
     try {
       // --whitespace=nowarn : une configuration apply.whitespace=fix ne doit pas retoucher les lignes choisies.
@@ -1310,7 +1310,7 @@ export class GitService {
       await runGit(this.repositoryPath, ['-c', 'core.longpaths=true', 'apply', '--cached', '--whitespace=nowarn', ...(stage ? [] : ['--reverse']), patchPath]);
     } catch {
       // `git apply` est atomique : en cas de refus, l'index n'a pas été touché.
-      throw new GitWorkbenchError('partial-apply-failed');
+      throw new BranchBraceError('partial-apply-failed');
     } finally {
       await rm(patchPath, { force: true });
     }
@@ -1318,14 +1318,14 @@ export class GitService {
     try {
       if (backup === null) await rm(indexPath, { force: true });
       else {
-        const temporary = `${indexPath}.git-workbench-restore`;
+        const temporary = `${indexPath}.branchbrace-restore`;
         await writeFile(temporary, backup);
         await rename(temporary, indexPath);
       }
     } catch {
-      throw new GitWorkbenchError('partial-restore-failed');
+      throw new BranchBraceError('partial-restore-failed');
     }
-    throw new GitWorkbenchError('partial-verification-failed');
+    throw new BranchBraceError('partial-verification-failed');
   }
 
   async #indexEntry(filePath) {
@@ -1368,16 +1368,16 @@ export class GitService {
   // s'il vise le dossier .git.
   async #workingPath(filePath, { allowMissing = false } = {}) {
     await this.#ensureRepositoryPath();
-    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || path.isAbsolute(filePath) || /^[a-z]:/i.test(filePath)) throw new GitWorkbenchError('invalid-path');
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || path.isAbsolute(filePath) || /^[a-z]:/i.test(filePath)) throw new BranchBraceError('invalid-path');
     const segments = filePath.split(/[\\/]/);
-    if (segments.some((segment) => segment === '..') || segments[0].toLowerCase() === '.git') throw new GitWorkbenchError('invalid-path');
+    if (segments.some((segment) => segment === '..') || segments[0].toLowerCase() === '.git') throw new BranchBraceError('invalid-path');
     const absolute = path.resolve(this.repositoryPath, filePath);
     const root = await realpath(this.repositoryPath);
     const real = await realpath(absolute).catch(async (error) => {
-      if (!allowMissing || error.code !== 'ENOENT') throw new GitWorkbenchError('invalid-path');
-      return path.join(await realpath(path.dirname(absolute)).catch(() => { throw new GitWorkbenchError('invalid-path'); }), path.basename(absolute));
+      if (!allowMissing || error.code !== 'ENOENT') throw new BranchBraceError('invalid-path');
+      return path.join(await realpath(path.dirname(absolute)).catch(() => { throw new BranchBraceError('invalid-path'); }), path.basename(absolute));
     });
-    if (!real.startsWith(root + path.sep)) throw new GitWorkbenchError('invalid-path');
+    if (!real.startsWith(root + path.sep)) throw new BranchBraceError('invalid-path');
     return absolute;
   }
 
@@ -1395,15 +1395,15 @@ export class GitService {
   async #pendingOperation() {
     await this.#ensureRepositoryPath();
     const operation = await this.operation();
-    if (!operation) throw new GitWorkbenchError('no-operation');
+    if (!operation) throw new BranchBraceError('no-operation');
     return operation;
   }
 
   // Seuls les fichiers que `git status` liste peuvent être indexés, désindexés ou comparés.
   async #statusEntry(filePath) {
-    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) throw new GitWorkbenchError('invalid-path');
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) throw new BranchBraceError('invalid-path');
     const entry = (await this.status()).files.find((file) => file.path === filePath);
-    if (!entry) throw new GitWorkbenchError('file-not-in-status');
+    if (!entry) throw new BranchBraceError('file-not-in-status');
     return entry;
   }
 
@@ -1441,7 +1441,7 @@ export class GitService {
 
   async #assertClean() {
     const status = await this.status();
-    if (status.files.length) throw new GitWorkbenchError('working-tree-not-clean');
+    if (status.files.length) throw new BranchBraceError('working-tree-not-clean');
   }
 
   // Vérifie que le dossier est toujours la racine du dépôt choisi. Le résultat est gardé quelques secondes : chaque
@@ -1450,12 +1450,12 @@ export class GitService {
   async #ensureRepositoryPath() {
     if (Date.now() < this.#verifiedUntil) return;
     const root = (await runGit(this.repositoryPath, ['rev-parse', '--show-toplevel'])).trim();
-    if (path.resolve(root) !== this.repositoryPath) throw new GitWorkbenchError('repository-mismatch');
+    if (path.resolve(root) !== this.repositoryPath) throw new BranchBraceError('repository-mismatch');
     this.#verifiedUntil = Date.now() + 3000;
   }
 
   async #resolveCommit(revision) {
-    if (typeof revision !== 'string' || revision.length > 255 || revision.startsWith('-') || /[\s\0~^:?*\\[\\]\\]/.test(revision) || revision.includes('..')) throw new GitWorkbenchError('invalid-revision');
+    if (typeof revision !== 'string' || revision.length > 255 || revision.startsWith('-') || /[\s\0~^:?*\\[\\]\\]/.test(revision) || revision.includes('..')) throw new BranchBraceError('invalid-revision');
     if (/^[0-9a-f]{7,40}$/i.test(revision)) {
       return (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`])).trim();
     }
@@ -1463,7 +1463,7 @@ export class GitService {
       await runGit(this.repositoryPath, ['check-ref-format', '--branch', revision]);
       return (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`])).trim();
     } catch {
-      throw new GitWorkbenchError('invalid-revision');
+      throw new BranchBraceError('invalid-revision');
     }
   }
 
@@ -1499,7 +1499,7 @@ export class GitService {
   async undo() {
     await this.#ensureRepositoryPath();
     const point = this.#undoTarget(await this.#points());
-    if (!point) throw new GitWorkbenchError('nothing-to-undo');
+    if (!point) throw new BranchBraceError('nothing-to-undo');
     return this.#restore(point, 'undo');
   }
 
@@ -1507,7 +1507,7 @@ export class GitService {
   async redo() {
     await this.#ensureRepositoryPath();
     const point = this.#redoTarget(await this.#points());
-    if (!point) throw new GitWorkbenchError('nothing-to-redo');
+    if (!point) throw new BranchBraceError('nothing-to-redo');
     return this.#restore(point, 'redo');
   }
 
@@ -1515,22 +1515,22 @@ export class GitService {
   async restoreRecoveryPoint(id) {
     await this.#ensureRepositoryPath();
     const point = (await this.#points()).find((item) => item.id === id);
-    if (!point) throw new GitWorkbenchError('recovery-point-not-found');
+    if (!point) throw new BranchBraceError('recovery-point-not-found');
     return this.#restore(point, 'undo');
   }
 
-  // `refs/git-workbench/recovery/<id>` garde le commit de HEAD (nom historique, cité dans les messages) ;
+  // `refs/branchbrace/recovery/<id>` garde le commit de HEAD (nom historique, cité dans les messages) ;
   // `recovery-state/<id>` pointe un commit interne : message = description JSON du point, arbre = index enregistré,
   // parents = commits à garder en vie (HEAD, refs enregistrées, modifications non commitées).
   async #savePoint(operation, kind, { worktree = false, refs = [] } = {}) {
-    if (typeof operation !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(operation)) throw new GitWorkbenchError('invalid-operation');
-    if (!Array.isArray(refs)) throw new GitWorkbenchError('invalid-recovery-ref');
+    if (typeof operation !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(operation)) throw new BranchBraceError('invalid-operation');
+    if (!Array.isArray(refs)) throw new BranchBraceError('invalid-recovery-ref');
     const head = (await runGit(this.repositoryPath, ['rev-parse', '--verify', 'HEAD'])).trim();
     const branch = await this.#symbolicHead();
     const recorded = branch ? { [branch]: head } : {};
     for (const name of refs) {
-      if (typeof name !== 'string' || !/^refs\/(heads|tags)\/./.test(name)) throw new GitWorkbenchError('invalid-recovery-ref');
-      await runGit(this.repositoryPath, ['check-ref-format', name]).catch(() => { throw new GitWorkbenchError('invalid-recovery-ref'); });
+      if (typeof name !== 'string' || !/^refs\/(heads|tags)\/./.test(name)) throw new BranchBraceError('invalid-recovery-ref');
+      await runGit(this.repositoryPath, ['check-ref-format', name]).catch(() => { throw new BranchBraceError('invalid-recovery-ref'); });
       recorded[name] = await this.#refValue(name);
     }
     // Index non enregistrable (entrées en conflit) : la restauration se contentera alors de déplacer HEAD.
@@ -1544,11 +1544,11 @@ export class GitService {
     for (const value of new Set(Object.values(recorded).filter((item) => item && item !== head))) {
       // Un tag annoté n'est pas un commit : une ref dédiée le garde en vie.
       if ((await runGit(this.repositoryPath, ['cat-file', '-t', value])).trim() === 'commit') parents.push(value);
-      else await runGit(this.repositoryPath, ['update-ref', `refs/git-workbench/recovery-objects/${id}-${kept++}`, value]);
+      else await runGit(this.repositoryPath, ['update-ref', `refs/branchbrace/recovery-objects/${id}-${kept++}`, value]);
     }
     const tree = index || `${head}^{tree}`;
     const meta = await this.#commitTree(tree, parents, JSON.stringify(state));
-    const ref = `refs/git-workbench/recovery/${id}`;
+    const ref = `refs/branchbrace/recovery/${id}`;
     await runGit(this.repositoryPath, ['update-ref', ref, head]);
     await runGit(this.repositoryPath, ['update-ref', `${RECOVERY_STATE}/${id}`, meta]);
     return { ...state, id, ref, stateRef: `${RECOVERY_STATE}/${id}`, tree, parents: [...new Set(parents.filter(Boolean))], state };
@@ -1557,13 +1557,13 @@ export class GitService {
   // Modifications non commitées au format d'une entrée de stash (parents : HEAD, index, fichiers non suivis), créée
   // par `git stash create` et un index temporaire : la pile de stash, partagée entre worktrees, n'est pas touchée.
   async #snapshotWorktree(head) {
-    const created = (await runGit(this.repositoryPath, ['stash', 'create', 'git-workbench: point de reprise'], { env: RECOVERY_IDENTITY })).trim();
+    const created = (await runGit(this.repositoryPath, ['stash', 'create', 'branchbrace: point de reprise'], { env: RECOVERY_IDENTITY })).trim();
     // Une entrée finissant par « / » est un dépôt imbriqué : ni enregistré ni supprimé (`git clean` le laisse aussi).
     const untracked = (await runGit(this.repositoryPath, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter((item) => item && !item.endsWith('/'));
     if (!untracked.length) return created || null;
     const token = randomUUID();
-    const indexFile = path.join(await this.#gitDirectory(), `git-workbench-${token}.index`);
-    const listFile = path.join(await this.#gitDirectory(), `git-workbench-${token}.paths`);
+    const indexFile = path.join(await this.#gitDirectory(), `branchbrace-${token}.index`);
+    const listFile = path.join(await this.#gitDirectory(), `branchbrace-${token}.paths`);
     try {
       await writeFile(listFile, untracked.join('\0'));
       const env = { GIT_INDEX_FILE: indexFile };
@@ -1571,7 +1571,7 @@ export class GitService {
       const untrackedTree = (await runGit(this.repositoryPath, ['write-tree'], { env })).trim();
       const untrackedCommit = await this.#commitTree(untrackedTree, [], 'untracked files');
       const indexCommit = created ? `${created}^2` : await this.#commitTree(`${head}^{tree}`, [head], 'index');
-      return this.#commitTree(created ? `${created}^{tree}` : `${head}^{tree}`, [head, indexCommit, untrackedCommit], 'git-workbench: point de reprise');
+      return this.#commitTree(created ? `${created}^{tree}` : `${head}^{tree}`, [head, indexCommit, untrackedCommit], 'branchbrace: point de reprise');
     } finally {
       await rm(indexFile, { force: true });
       await rm(listFile, { force: true });
@@ -1595,7 +1595,7 @@ export class GitService {
       try { state = JSON.parse(subject); } catch { continue; }
       if (state?.version !== 1 || state.gitDir !== gitDir) continue;
       const id = stateRef.slice(RECOVERY_STATE.length + 1);
-      points.push({ ...state, id, ref: `refs/git-workbench/recovery/${id}`, stateRef, tree, parents: parents.split(' ').filter(Boolean), state });
+      points.push({ ...state, id, ref: `refs/branchbrace/recovery/${id}`, stateRef, tree, parents: parents.split(' ').filter(Boolean), state });
     }
     return points.sort((a, b) => b.createdAt - a.createdAt);
   }
@@ -1617,9 +1617,9 @@ export class GitService {
   }
 
   async #restore(point, counterKind) {
-    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    if (await this.operation()) throw new BranchBraceError('operation-in-progress');
     const branch = await this.#symbolicHead();
-    if (branch !== point.branch) throw new GitWorkbenchError('recovery-point-other-branch');
+    if (branch !== point.branch) throw new BranchBraceError('recovery-point-other-branch');
     const head = (await runGit(this.repositoryPath, ['rev-parse', '--verify', 'HEAD'])).trim();
     const others = Object.entries(point.refs).filter(([name]) => name !== point.branch);
     if (branch) await this.#assertNotPublished(branch, head, point.head);
@@ -1630,7 +1630,7 @@ export class GitService {
     if (currentIndex) {
       // Comme `git status` : un fichier réécrit à l'identique ne doit pas compter comme modifié.
       await runGit(this.repositoryPath, ['update-index', '-q', '--refresh'], { acceptExitCodes: [1] });
-      await runGit(this.repositoryPath, ['read-tree', '-n', '-m', '-u', currentIndex, point.index]).catch(() => { throw new GitWorkbenchError('unsafe-working-tree'); });
+      await runGit(this.repositoryPath, ['read-tree', '-n', '-m', '-u', currentIndex, point.index]).catch(() => { throw new BranchBraceError('unsafe-working-tree'); });
     }
     // L'état courant, modifications non commitées comprises, devient un point de reprise avant d'être remplacé.
     const counter = await this.#savePoint(counterKind, counterKind, { worktree: true, refs: others.map(([name]) => name) });
@@ -1668,7 +1668,7 @@ export class GitService {
     const bases = (await runGit(this.repositoryPath, ['merge-base', '--all', from, published], { acceptExitCodes: [1] })).split(/\s+/).filter(Boolean);
     for (const base of bases) {
       const kept = await runGit(this.repositoryPath, ['merge-base', '--is-ancestor', base, to]).then(() => true, () => false);
-      if (!kept) throw new GitWorkbenchError('recovery-would-rewrite-published');
+      if (!kept) throw new BranchBraceError('recovery-would-rewrite-published');
     }
   }
 
@@ -1682,8 +1682,8 @@ export class GitService {
 
   // Nom complet `prefixe + nom` vérifié par `git check-ref-format` (sans --branch, qui accepterait « @{-1} »).
   async #checkRefName(prefix, name, code) {
-    if (typeof name !== 'string' || !name || name.length > 255 || name !== name.trim() || name.startsWith('-') || name.includes('\0')) throw new GitWorkbenchError(code);
-    await runGit(this.repositoryPath, ['check-ref-format', `${prefix}${name}`]).catch(() => { throw new GitWorkbenchError(code); });
+    if (typeof name !== 'string' || !name || name.length > 255 || name !== name.trim() || name.startsWith('-') || name.includes('\0')) throw new BranchBraceError(code);
+    await runGit(this.repositoryPath, ['check-ref-format', `${prefix}${name}`]).catch(() => { throw new BranchBraceError(code); });
   }
 
   async #refExists(ref) {
@@ -1691,7 +1691,7 @@ export class GitService {
   }
 
   #validateBranchName(name) {
-    if (typeof name !== 'string' || !name.trim() || name.startsWith('-') || name.includes('\0')) throw new GitWorkbenchError('invalid-branch-name');
-    if (name !== name.trim()) throw new GitWorkbenchError('invalid-branch-name');
+    if (typeof name !== 'string' || !name.trim() || name.startsWith('-') || name.includes('\0')) throw new BranchBraceError('invalid-branch-name');
+    if (name !== name.trim()) throw new BranchBraceError('invalid-branch-name');
   }
 }

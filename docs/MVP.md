@@ -1,4 +1,4 @@
-# Git Workbench — MVP specification
+# BranchBrace — MVP specification
 
 ## Goal and user
 

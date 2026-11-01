@@ -50,7 +50,7 @@ export async function openUpdates({ check = false, onResult = () => {} } = {}) {
       const found = await window.workbench.checkForUpdate(channel.value);
       onResult(found);
       if (!found.latest) show(`Aucune release publiée sur ce canal. Version installée : ${found.current}.`);
-      else if (!found.available) show(`Git Workbench ${found.current} est à jour (dernière version du canal : ${found.latest.version}).`, 'ok');
+      else if (!found.available) show(`BranchBrace ${found.current} est à jour (dernière version du canal : ${found.latest.version}).`, 'ok');
       else {
         const date = found.latest.publishedAt ? ` le ${new Date(found.latest.publishedAt).toLocaleDateString('fr-FR')}` : '';
         show(`Version ${found.latest.version}${found.latest.prerelease ? ' (préversion)' : ''} disponible, publiée${date}. Version installée : ${found.current}.`, 'available');
@@ -72,7 +72,7 @@ export async function openUpdates({ check = false, onResult = () => {} } = {}) {
     install.disabled = search.disabled = channel.disabled = true;
     try {
       const outcome = await window.workbench.installUpdate();
-      if (outcome?.installing) show(`Lancement de l’installateur ${outcome.installing}… Git Workbench va se fermer.`, 'ok');
+      if (outcome?.installing) show(`Lancement de l’installateur ${outcome.installing}… BranchBrace va se fermer.`, 'ok');
       else if (outcome?.opened) show('Page de la release ouverte dans le navigateur.', 'ok');
     } catch (error) { show(describeError(error), 'error'); }
     finally { install.disabled = search.disabled = channel.disabled = false; }

@@ -38,7 +38,7 @@ test('independent branch tips get distinct lanes and freed lanes are reused', ()
 });
 
 test('graph() lists every branch with decorations and excludes recovery refs', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-graph-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-graph-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = (...args) => { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   git('init', '--quiet', '-b', 'main');
@@ -49,7 +49,7 @@ test('graph() lists every branch with decorations and excludes recovery refs', a
   git('switch', '--quiet', '-c', 'feature');
   await writeFile(path.join(root, 'b.txt'), 'b\n'); git('add', '.'); git('commit', '--quiet', '-m', 'feature work');
   git('switch', '--quiet', 'main');
-  git('update-ref', 'refs/git-workbench/recovery/test', 'HEAD');
+  git('update-ref', 'refs/branchbrace/recovery/test', 'HEAD');
 
   const service = new GitService(root);
   await service.verifyRepository();
@@ -72,7 +72,7 @@ test('graph() lists every branch with decorations and excludes recovery refs', a
 });
 
 test('references(), stageAll() and createBranch() at a start point', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-refs-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-refs-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = (...args) => { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   git('init', '--quiet', '-b', 'main');

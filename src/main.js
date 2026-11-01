@@ -1028,7 +1028,7 @@ window.addEventListener('focus', () => autoFetch.onFocus());
 // Recherche de mise à jour au démarrage, seulement si elle a été activée dans « Mises à jour… ».
 checkOnStartup().then((found) => {
   setUpdate(found);
-  if (ui.pendingUpdate) ui.message(`Git Workbench ${ui.pendingUpdate.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
+  if (ui.pendingUpdate) ui.message(`BranchBrace ${ui.pendingUpdate.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
 });
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());

@@ -4,7 +4,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitService, GitWorkbenchError } from '../src/git.js';
+import { GitService, BranchBraceError } from '../src/git.js';
 
 function git(cwd, ...args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -13,7 +13,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-test-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-test-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');
@@ -91,7 +91,7 @@ test('unstaging preserves working-tree content', async (t) => {
 
 test('commit requires a non-empty message and commits only staged paths', async (t) => {
   const { repo, service } = await fixture(t);
-  await assert.rejects(service.commit('  '), (error) => error instanceof GitWorkbenchError && error.code === 'commit-message-required');
+  await assert.rejects(service.commit('  '), (error) => error instanceof BranchBraceError && error.code === 'commit-message-required');
   await writeFile(path.join(repo, 'base.txt'), 'included\n');
   await writeFile(path.join(repo, 'other.txt'), 'left out\n');
   await service.stage('base.txt');
@@ -358,10 +358,10 @@ test('cherry-pick and rebase save local recovery refs before rewriting history',
   const sideCommit = git(repo, 'rev-parse', 'HEAD');
   await service.switchBranch('main');
   const picked = await service.cherryPick(sideCommit);
-  assert.match(picked.recoveryRef, /^refs\/git-workbench\/recovery\/cherry-pick-/);
+  assert.match(picked.recoveryRef, /^refs\/branchbrace\/recovery\/cherry-pick-/);
   assert.equal(git(repo, 'show', '-s', '--format=%s', 'HEAD'), 'side change');
   const rebased = await service.rebase(base);
-  assert.match(rebased.recoveryRef, /^refs\/git-workbench\/recovery\/rebase-/);
+  assert.match(rebased.recoveryRef, /^refs\/branchbrace\/recovery\/rebase-/);
 });
 
 test('a cherry-pick conflict preserves the pre-operation recovery ref and reports the abort path', async (t) => {
@@ -377,7 +377,7 @@ test('a cherry-pick conflict preserves the pre-operation recovery ref and report
   let recoveryRef;
   await assert.rejects(service.cherryPick(side), (error) => {
     assert.equal(error.code, 'conflict');
-    assert.match(error.recoveryRef, /^refs\/git-workbench\/recovery\/cherry-pick-/);
+    assert.match(error.recoveryRef, /^refs\/branchbrace\/recovery\/cherry-pick-/);
     assert.match(error.message, /git cherry-pick --abort/);
     recoveryRef = error.recoveryRef;
     return true;
@@ -399,7 +399,7 @@ test('a rebase conflict preserves the pre-operation recovery ref and reports the
   let recoveryRef;
   await assert.rejects(service.rebase('upstream'), (error) => {
     assert.equal(error.code, 'conflict');
-    assert.match(error.recoveryRef, /^refs\/git-workbench\/recovery\/rebase-/);
+    assert.match(error.recoveryRef, /^refs\/branchbrace\/recovery\/rebase-/);
     assert.match(error.message, /git rebase --abort/);
     recoveryRef = error.recoveryRef;
     return true;
@@ -419,7 +419,7 @@ test('interactive rebase applies an explicitly ordered plan and leaves a recover
   git(repo, 'add', 'second.txt'); git(repo, 'commit', '--quiet', '-m', 'second');
   const second = git(repo, 'rev-parse', 'HEAD');
   const result = await service.interactiveRebase('upstream', [{ hash: second, action: 'pick' }, { hash: first, action: 'pick' }]);
-  assert.match(result.recoveryRef, /^refs\/git-workbench\/recovery\/interactive-rebase-/);
+  assert.match(result.recoveryRef, /^refs\/branchbrace\/recovery\/interactive-rebase-/);
   assert.equal(git(repo, 'log', '-2', '--format=%s').split('\n').join(','), 'first,second');
   assert.equal((await service.status()).files.length, 0);
 });
@@ -435,7 +435,7 @@ test('interactive rebase rejects malformed plans before creating a recovery ref'
 
 test('an inherited GIT_DIR/GIT_WORK_TREE does not redirect operations to another repository', async (t) => {
   const { repo, service } = await fixture(t);
-  const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-test-other-'));
+  const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-test-other-'));
   const other = path.join(otherRoot, 'other-repo');
   await mkdir(other);
   git(other, 'init', '--quiet', '-b', 'other-branch');
@@ -469,7 +469,7 @@ test('splitting a commit replays it as several commits and keeps the rest of the
   await writeFile(path.join(repo, 'c.txt'), 'c\n');
   git(repo, 'add', 'c.txt'); git(repo, 'commit', '--quiet', '-m', 'c');
   const result = await service.splitCommit(target);
-  assert.match(result.recoveryRef, /^refs\/git-workbench\/recovery\/interactive-rebase-/);
+  assert.match(result.recoveryRef, /^refs\/branchbrace\/recovery\/interactive-rebase-/);
   assert.equal(result.status.operation, 'rebase');
   assert.equal(result.status.split.hash, target);
   assert.equal(result.status.split.message, 'a and b');

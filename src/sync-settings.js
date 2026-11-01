@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { GitWorkbenchError } from './git.js';
+import { BranchBraceError } from './git.js';
 
 // Fetch automatique : toutes les N minutes, à l'ouverture d'un dépôt et au retour sur la fenêtre. Activé par défaut
 // toutes les 5 minutes ; il ne met à jour que les branches distantes, jamais la branche courante (le pull reste un clic).
@@ -20,7 +20,7 @@ export async function readSyncSettings(file) {
 export async function writeSyncSettings(file, changes) {
   const settings = await readSyncSettings(file);
   if (changes?.intervalMinutes !== undefined) {
-    if (!FETCH_INTERVALS.includes(changes.intervalMinutes)) throw new GitWorkbenchError('invalid-fetch-interval');
+    if (!FETCH_INTERVALS.includes(changes.intervalMinutes)) throw new BranchBraceError('invalid-fetch-interval');
     settings.intervalMinutes = changes.intervalMinutes;
   }
   if (changes?.autoFetch !== undefined) settings.autoFetch = changes.autoFetch === true;

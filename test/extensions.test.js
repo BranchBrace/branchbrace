@@ -25,7 +25,7 @@ const astro = {
 };
 
 async function temporary(run) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'git-workbench-extensions-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'branchbrace-extensions-'));
   try { return await run(dir); } finally { await rm(dir, { recursive: true, force: true }); }
 }
 

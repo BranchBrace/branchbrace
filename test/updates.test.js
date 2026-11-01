@@ -10,7 +10,7 @@ const manifest = JSON.parse(await readFile(new URL('../package.json', import.met
 const DOWNLOADS = 'https://github.com/MonniHermes/git-workbench/releases/download';
 
 function release(tag, prerelease, extra = {}) {
-  const name = `Git.Workbench.Setup.${tag.slice(1)}.exe`;
+  const name = `BranchBrace.Setup.${tag.slice(1)}.exe`;
   return {
     tag_name: tag,
     prerelease,
@@ -67,7 +67,7 @@ test('an update is offered only when the channel has a newer version', async () 
   assert.equal(beta.available, true);
   assert.equal(beta.latest.version, '1.1.0-rc.10');
   assert.equal(beta.latest.prerelease, true);
-  assert.equal(beta.latest.installer.name, 'Git.Workbench.Setup.1.1.0-rc.10.exe');
+  assert.equal(beta.latest.installer.name, 'BranchBrace.Setup.1.1.0-rc.10.exe');
 
   const fromRc = await checkForUpdate({ currentVersion: '1.0.0-rc.6', channel: 'stable', platform: 'win32', fetch });
   assert.equal(fromRc.available, true, 'a RC user switching to stable is offered the final release');
@@ -80,7 +80,7 @@ test('an update is offered only when the channel has a newer version', async () 
 
 test('installer assets hosted outside the project releases are never offered', async () => {
   const foreign = release('v1.2.0', false);
-  foreign.assets[0].browser_download_url = 'https://example.com/Git.Workbench.Setup.1.2.0.exe';
+  foreign.assets[0].browser_download_url = 'https://example.com/BranchBrace.Setup.1.2.0.exe';
   const fetch = respond({ 'https://api.github.com/repos/MonniHermes/git-workbench/releases?per_page=50': [foreign] });
   const result = await checkForUpdate({ currentVersion: '1.0.0', channel: 'stable', platform: 'win32', fetch });
   assert.equal(result.available, true);
@@ -99,14 +99,14 @@ test('the downloaded installer is kept only when it matches its published SHA-25
     const content = new TextEncoder().encode('MZ..');
     const digest = createHash('sha256').update(content).digest('hex');
     const installer = {
-      name: 'Git.Workbench.Setup.1.1.0.exe',
+      name: 'BranchBrace.Setup.1.1.0.exe',
       size: content.length,
-      url: `${DOWNLOADS}/v1.1.0/Git.Workbench.Setup.1.1.0.exe`,
-      checksumUrl: `${DOWNLOADS}/v1.1.0/Git.Workbench.Setup.1.1.0.exe.sha256`,
+      url: `${DOWNLOADS}/v1.1.0/BranchBrace.Setup.1.1.0.exe`,
+      checksumUrl: `${DOWNLOADS}/v1.1.0/BranchBrace.Setup.1.1.0.exe.sha256`,
     };
     const progress = [];
     const file = await downloadInstaller(installer, directory, {
-      fetch: respond({ [installer.url]: content, [installer.checksumUrl]: `${digest}  artifacts/Git Workbench Setup 1.1.0.exe\n` }),
+      fetch: respond({ [installer.url]: content, [installer.checksumUrl]: `${digest}  artifacts/BranchBrace Setup 1.1.0.exe\n` }),
       onProgress: (step) => progress.push(step),
     });
     assert.equal(await readFile(file, 'utf8'), 'MZ..');

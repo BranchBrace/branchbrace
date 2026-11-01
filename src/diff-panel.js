@@ -3,7 +3,7 @@ import { baseOptions, languageFor, monaco } from './monaco.js';
 // Vue centrale de diff : éditeur de diff Monaco (côte à côte ou en ligne, zones inchangées repliables, surlignage
 // au mot près). Pour un fichier non indexé, le côté droit est le fichier de travail lui-même : modifiable, Ctrl+S
 // l'enregistre.
-const PREFS_KEY = 'git-workbench.diff';
+const PREFS_KEY = 'branchbrace.diff';
 function readPrefs() {
   try { return { sideBySide: true, collapse: true, wrap: false, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; }
   catch { return { sideBySide: true, collapse: true, wrap: false }; }

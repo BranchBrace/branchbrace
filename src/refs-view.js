@@ -89,7 +89,7 @@ function row(kind, ref, label, { selectedHash, onSelect, onContextMenu }) {
 }
 
 export function renderRefs(container, refs, handlers) {
-  const { filter, onActivate, onCheckoutRemote, onOpenRemote, onOpenWorktree, onWorktreeMenu, loadRemoteIcon } = handlers;
+  const { filter, onActivate, onCheckoutRemote, onOpenRemote, onRemoteMenu, onOpenWorktree, onWorktreeMenu, loadRemoteIcon } = handlers;
   const needle = filter.trim().toLowerCase();
   const matches = (name) => !needle || name.toLowerCase().includes(needle);
   container.replaceChildren();
@@ -137,6 +137,7 @@ export function renderRefs(container, refs, handlers) {
       head.append(remoteLogo(remote, loadRemoteIcon), element('span', 'remote-name', remote.name));
       if (remote.path) head.append(element('span', 'remote-path', remote.path));
       head.title = remote.web ? `${remote.name} → ${remote.web}` : remote.name;
+      head.addEventListener('contextmenu', (event) => { event.preventDefault(); onRemoteMenu(remote.name, event.clientX, event.clientY); });
       if (remote.web) {
         const open = element('button', 'remote-open', '↗');
         open.title = `Ouvrir ${remote.web} dans le navigateur`;

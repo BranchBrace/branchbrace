@@ -239,10 +239,9 @@ app.whenReady().then(() => {
     return service(root).abortOperation();
   });
   handle('repository:head-message', async (_event, { root }) => service(root).headMessage());
-  // L'amend réécrit le dernier commit : confirmation seulement s'il est déjà publié (il faudrait alors forcer le push,
-  // ce que l'application ne fait jamais).
+  // L'amend réécrit le dernier commit : confirmation seulement s'il est déjà publié (il faudra alors un push forcé).
   handle('repository:amend', async (_event, { root, message }) => {
-    if (await service(root).headPublished() && !await confirm('Amender un commit déjà poussé ?', `Le dernier commit est déjà sur ${(await service(root).status()).upstream}. Après l’amend, la branche locale divergera de sa distante et un push normal sera refusé (l’application ne force jamais un push).
+    if (await service(root).headPublished() && !await confirm('Amender un commit déjà poussé ?', `Le dernier commit est déjà sur ${(await service(root).status()).upstream}. Après l’amend, la branche locale divergera de sa distante : un push normal sera refusé, seul un push forcé (avec lease, action distincte) pourra la remplacer.
 
 Un point de récupération local sera conservé.`)) return null;
     return service(root).amend(message);
@@ -290,6 +289,40 @@ Un point de récupération local sera conservé.`)) return null;
     if (upstream !== state.upstream) throw new GitWorkbenchError('upstream-changed');
     if (!await confirm('Envoyer les commits ?', `Git va pousser vers ${upstream}. Le credential helper ou SSH configuré sera utilisé. Aucun force-push ne sera effectué.`)) return null;
     return service(root).push(upstream);
+  });
+  // Push forcé : action distincte du push, jamais son repli. La confirmation liste les commits distants qui vont
+  // disparaître, et le lease transmis à Git est celui de cette liste : si l'upstream a bougé entre-temps, Git refuse.
+  handle('repository:force-push', async (_event, { root, upstream }) => {
+    const preview = await service(root).forcePushPreview(upstream);
+    const lines = preview.dropped.map((commit) => `${commit.shortHash} ${commit.subject}`);
+    if (preview.droppedCount > lines.length) lines.push(`… et ${preview.droppedCount - lines.length} autre(s)`);
+    const listing = lines.length
+      ? `Commits distants qui vont disparaître de ${preview.upstream} :\n${lines.join('\n')}`
+      : `Aucun commit distant ne disparaîtra : ${preview.upstream} est déjà contenu dans votre branche.`;
+    if (!await confirm('Forcer le push ?', `Git va remplacer ${preview.upstream} par votre branche locale (--force-with-lease : refusé si ${preview.upstream} a changé depuis votre dernier fetch, où il pointait sur ${preview.lease.slice(0, 12)}).
+
+${listing}
+
+Un point de récupération local conservera ces commits.`)) return null;
+    return service(root).forcePush(upstream, preview.lease);
+  });
+  // Dépôts distants : l'URL vue par la page est toujours sans identifiants, et une URL qui en contient est refusée (A10).
+  handle('repository:remotes', async (_event, { root }) => service(root).remotes());
+  handle('repository:remote:add', async (_event, { root, name, url }) => service(root).addRemote(name, url));
+  handle('repository:remote:rename', async (_event, { root, name, newName }) => service(root).renameRemote(name, newName));
+  handle('repository:remote:set-url', async (_event, { root, name, url }) => service(root).setRemoteUrl(name, url));
+  handle('repository:remote:remove', async (_event, { root, name }) => {
+    const target = (await service(root).remotes()).find((item) => item.name === name);
+    if (!target) throw new GitWorkbenchError('remote-not-found');
+    const refs = await service(root).references();
+    const followed = new Set(refs.remote.filter((ref) => ref.remote === name).map((ref) => ref.name));
+    const orphans = refs.local.filter((ref) => followed.has(ref.upstream)).map((ref) => ref.name);
+    if (!await confirm(`Retirer le dépôt distant « ${name} » ?`, `URL : ${target.url}
+
+Le remote sera retiré de la configuration de ce dépôt et ses ${followed.size} branche(s) distante(s) disparaîtront de cet ordinateur. Rien n’est supprimé sur le serveur.${orphans.length ? `\nCes branches locales n’auront plus d’upstream : ${orphans.join(', ')}.` : ''}
+
+Pour le rajouter plus tard, il faudra cette URL.`)) return null;
+    return service(root).removeRemote(name);
   });
   handle('repository:branches', async (_event, { root }) => service(root).branches());
   handle('repository:branch:create', async (_event, { root, name, startPoint }) => service(root).createBranch(name, startPoint || null));

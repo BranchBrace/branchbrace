@@ -1,13 +1,18 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, net, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { GitService, GitWorkbenchError } = require('../src/git.js');
+const updates = require('../src/updates.js');
 
 let mainWindow;
 const repositories = new Map();
 const sessionFile = () => path.join(app.getPath('userData'), 'session.json');
+const updateSettingsFile = () => path.join(app.getPath('userData'), 'updates.json');
+// Dernière release trouvée : l'installation ne porte que sur elle, jamais sur une URL reçue de la page.
+let lastUpdateCheck = null;
+let updateInProgress = false;
 
 // Onglets ouverts et onglet actif, rouverts au lancement suivant. Seuls des chemins de dépôts vérifiés y sont écrits.
 function readSession() {
@@ -280,6 +285,46 @@ Un point de récupération local sera conservé.`)) return null;
     // Pas de seconde confirmation : le plan, action par action, vient d'être validé dans l'éditeur de rebase, et
     // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
+  });
+  // Mises à jour : réseau limité à l'API publique des releases GitHub, sur demande ou si la vérification au démarrage
+  // a été activée. Sous Windows l'installateur est téléchargé, vérifié (SHA-256) puis lancé ; ailleurs, la page de la
+  // release s'ouvre dans le navigateur.
+  handle('updates:settings', async () => ({
+    ...(await updates.readUpdateSettings(updateSettingsFile(), app.getVersion())),
+    current: app.getVersion(),
+    installable: process.platform === 'win32' && app.isPackaged,
+  }));
+  handle('updates:settings:set', async (_event, changes) => updates.writeUpdateSettings(updateSettingsFile(), app.getVersion(), changes));
+  handle('updates:check', async (_event, { channel } = {}) => {
+    const settings = await updates.readUpdateSettings(updateSettingsFile(), app.getVersion());
+    lastUpdateCheck = await updates.checkForUpdate({ currentVersion: app.getVersion(), channel: channel ?? settings.channel, fetch: net.fetch });
+    return lastUpdateCheck;
+  });
+  handle('updates:install', async () => {
+    const latest = lastUpdateCheck?.available ? lastUpdateCheck.latest : null;
+    if (!latest) throw new GitWorkbenchError('update-not-available');
+    if (!latest.installer || !app.isPackaged) {
+      await shell.openExternal(latest.page);
+      return { opened: latest.page };
+    }
+    if (updateInProgress) throw new GitWorkbenchError('update-in-progress');
+    if (!await confirm(`Installer la version ${latest.version} ?`, `L’installateur ${latest.installer.name} va être téléchargé depuis GitHub (${Math.round(latest.installer.size / 1048576)} Mo) et son empreinte SHA-256 vérifiée. Git Workbench se fermera ensuite pour laisser l’installateur remplacer la version ${app.getVersion()}.
+
+Vos onglets seront rouverts au prochain lancement.`)) return null;
+    updateInProgress = true;
+    try {
+      const file = await updates.downloadInstaller(latest.installer, path.join(app.getPath('temp'), 'git-workbench-update'), {
+        fetch: net.fetch,
+        onProgress: (progress) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:progress', progress); },
+      });
+      await new Promise((resolve, reject) => {
+        const child = spawn(file, [], { detached: true, stdio: 'ignore' });
+        child.once('error', () => reject(new GitWorkbenchError('update-launch-failed')));
+        child.once('spawn', () => { child.unref(); resolve(); });
+      });
+    } finally { updateInProgress = false; }
+    setTimeout(() => app.quit(), 300);
+    return { installing: latest.version };
   });
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

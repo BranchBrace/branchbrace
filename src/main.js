@@ -6,6 +6,7 @@ import { editRebasePlan } from './rebase-editor.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
 import { describeError } from './errors.js';
+import { checkOnStartup, openUpdates } from './update-dialog.js';
 
 const SUMMARY_LIMIT = 72;
 const $ = (selector) => document.querySelector(selector);
@@ -587,6 +588,11 @@ $('#empty-open').addEventListener('click', chooseRepository);
 $('#new-tab').addEventListener('click', chooseRepository);
 // Menu de l'application (remplace la barre de menu native) et ses raccourcis.
 const windowAction = (action) => ui.invoke(() => window.workbench.windowAction(action));
+// Une version plus récente trouvée (au démarrage ou depuis la fenêtre) est signalée par une pastille sur le menu.
+const setUpdate = (found) => {
+  ui.update = found?.available ? found : null;
+  $('#app-menu').classList.toggle('has-update', Boolean(ui.update));
+};
 const appMenu = () => {
   const box = $('#app-menu').getBoundingClientRect();
   showMenu([
@@ -601,6 +607,7 @@ const appMenu = () => {
     ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
     ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
     null,
+    [ui.update ? `Mise à jour disponible (${ui.update.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.update), onResult: setUpdate })],
     ['Recharger la fenêtre', () => windowAction('reload')],
     import.meta.env.DEV ? ['Outils de développement', () => windowAction('devtools'), false, 'Ctrl+Maj+I'] : undefined,
     null,
@@ -630,6 +637,11 @@ document.addEventListener('keydown', (event) => {
   ui.tabs = session.tabs;
   ui.open(session.snapshot);
 })();
+// Recherche de mise à jour au démarrage, seulement si elle a été activée dans « Mises à jour… ».
+checkOnStartup().then((found) => {
+  setUpdate(found);
+  if (ui.update) ui.message(`Git Workbench ${ui.update.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
+});
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());
 $('#view-graph').addEventListener('click', () => ui.showGraph());

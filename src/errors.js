@@ -35,6 +35,13 @@ const MESSAGES = {
   'invalid-content': 'Contenu de fichier invalide.',
   'file-not-editable': 'Ce fichier est binaire ou trop volumineux pour l’éditeur.',
   'remote-no-web': 'Ce dépôt distant n’a pas de page web connue (URL locale ou non reconnue).',
+  'update-check-failed': 'Impossible de joindre GitHub pour rechercher une mise à jour (hors ligne, proxy ou limite de l’API). Réessayez plus tard.',
+  'invalid-update-channel': 'Canal de mise à jour inconnu.',
+  'update-not-available': 'Aucune mise à jour à installer : relancez la recherche.',
+  'update-in-progress': 'Une mise à jour est déjà en cours de téléchargement.',
+  'update-download-failed': 'Le téléchargement de la mise à jour a échoué. Réessayez, ou installez-la depuis la page de la release.',
+  'update-checksum-mismatch': 'L’installateur téléchargé ne correspond pas à son empreinte SHA-256 publiée : il a été supprimé sans être lancé.',
+  'update-launch-failed': 'L’installateur a été téléchargé mais n’a pas pu être lancé.',
 };
 
 export function describeError(error) {

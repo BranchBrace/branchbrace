@@ -159,6 +159,158 @@ test('a rejected non-fast-forward push is not reported as success', async (t) =>
   assert.notEqual(git(bare, 'rev-parse', 'refs/heads/main'), git(repo, 'rev-parse', 'HEAD'));
 });
 
+// Dépôt suivi par origin/main et un second clone qui publie des commits sur le remote bare local.
+async function trackedFixture(t) {
+  const context = await fixture(t);
+  const { root, repo } = context;
+  const bare = path.join(root, 'remote.git');
+  const competitor = path.join(root, 'competitor');
+  git(root, 'init', '--quiet', '--bare', bare);
+  git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  git(repo, 'remote', 'add', 'origin', bare);
+  git(repo, 'push', '--quiet', '-u', 'origin', 'main');
+  git(root, 'clone', '--quiet', bare, competitor);
+  git(competitor, 'config', 'user.name', 'Competing Writer');
+  git(competitor, 'config', 'user.email', 'competitor@example.invalid');
+  const publish = async (file, content) => {
+    await writeFile(path.join(competitor, file), content);
+    git(competitor, 'add', file); git(competitor, 'commit', '--quiet', '-m', `remote ${file}`);
+    git(competitor, 'push', '--quiet');
+    return git(competitor, 'rev-parse', 'HEAD');
+  };
+  return { ...context, bare, publish };
+}
+
+test('background fetch reports the current branch behind its upstream without moving it', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  const headBefore = git(repo, 'rev-parse', 'HEAD');
+  await publish('remote.txt', 'remote advance\n');
+  assert.deepEqual(await service.fetch({ background: true }), { skipped: null });
+  const status = await service.status();
+  assert.equal(status.upstream, 'origin/main');
+  assert.equal(status.behind, 1);
+  assert.equal(status.ahead, 0);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), headBefore);
+});
+
+test('background fetch is skipped while a Git operation is in progress', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  await publish('remote.txt', 'remote advance\n');
+  const before = git(repo, 'rev-parse', 'refs/remotes/origin/main');
+  await writeFile(path.join(repo, '.git', 'MERGE_HEAD'), `${before}\n`);
+  assert.deepEqual(await service.fetch({ background: true }), { skipped: 'operation', operation: 'merge' });
+  assert.equal(git(repo, 'rev-parse', 'refs/remotes/origin/main'), before);
+});
+
+test('pull fast-forwards the current branch to its upstream and verifies HEAD', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  const remoteHead = await publish('remote.txt', 'remote advance\n');
+  await writeFile(path.join(repo, 'untracked.txt'), 'kept\n');
+  const result = await service.pull('origin/main');
+  assert.equal(result.pulled, true);
+  assert.equal(result.upstream, 'origin/main');
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), remoteHead);
+  assert.equal(git(repo, 'rev-list', '--count', 'HEAD'), '2');
+  assert.equal(await readFile(path.join(repo, 'untracked.txt'), 'utf8'), 'kept\n');
+  assert.equal((await service.pull('origin/main')).pulled, false);
+});
+
+test('pull leaves diverged branches untouched and the status reports ahead and behind', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  await publish('remote.txt', 'remote advance\n');
+  await writeFile(path.join(repo, 'base.txt'), 'local advance\n');
+  await service.stage('base.txt'); await service.commit('local advance');
+  const localHead = git(repo, 'rev-parse', 'HEAD');
+  const result = await service.pull('origin/main');
+  assert.deepEqual([result.pulled, result.diverged], [false, true]);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), localHead);
+  assert.equal(git(repo, 'rev-list', '--merges', '--count', 'HEAD'), '0');
+  const status = await service.status();
+  assert.equal(status.operation, null);
+  assert.deepEqual([status.ahead, status.behind], [1, 1]);
+});
+
+test('pull leaves conflicting uncommitted changes to Git’s refusal', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  await publish('base.txt', 'remote edit\n');
+  await writeFile(path.join(repo, 'base.txt'), 'uncommitted edit\n');
+  const localHead = git(repo, 'rev-parse', 'HEAD');
+  await assert.rejects(service.pull('origin/main'), (error) => error.code === 'unsafe-working-tree');
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), localHead);
+  assert.equal(await readFile(path.join(repo, 'base.txt'), 'utf8'), 'uncommitted edit\n');
+});
+
+test('background fetch environment never prompts for credentials', async () => {
+  const { nonInteractiveEnv, NON_INTERACTIVE_CONFIG, INTERACTIVE_ENV_VARS } = await import('../src/git.js');
+  assert.deepEqual(NON_INTERACTIVE_CONFIG, ['-c', 'core.askPass=', '-c', 'credential.interactive=false']);
+  assert.deepEqual(INTERACTIVE_ENV_VARS, ['GIT_ASKPASS', 'SSH_ASKPASS']);
+  assert.deepEqual(nonInteractiveEnv({}, {}), { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' });
+  assert.equal(nonInteractiveEnv({ sshCommand: 'C:/OpenSSH/ssh.exe -i key' }, {}).GIT_SSH_COMMAND, 'C:/OpenSSH/ssh.exe -i key -o BatchMode=yes');
+  assert.equal(nonInteractiveEnv({ sshCommand: 'ssh' }, { GIT_SSH_COMMAND: 'ssh -p 2201' }).GIT_SSH_COMMAND, 'ssh -p 2201 -o BatchMode=yes');
+  // plink n'a pas BatchMode : `-batch` l'empêche d'ouvrir une boîte de dialogue, et la variante reste explicite pour Git.
+  assert.deepEqual(nonInteractiveEnv({}, { GIT_SSH: 'C:\\Program Files\\PuTTY\\plink.exe' }), {
+    GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never',
+    GIT_SSH_COMMAND: "'C:\\Program Files\\PuTTY\\plink.exe' -batch", GIT_SSH_VARIANT: 'plink',
+  });
+  assert.equal(nonInteractiveEnv({ sshCommand: '"C:/PuTTY/PLINK.EXE" -v' }, {}).GIT_SSH_COMMAND, '"C:/PuTTY/PLINK.EXE" -v -batch');
+  // TortoisePlink reçoit déjà -batch de Git : seule la variante est fixée.
+  assert.deepEqual([nonInteractiveEnv({ sshCommand: 'TortoisePlink.exe' }, {}).GIT_SSH_COMMAND, nonInteractiveEnv({ sshCommand: 'TortoisePlink.exe' }, {}).GIT_SSH_VARIANT], ['TortoisePlink.exe', 'tortoiseplink']);
+  // core.sshCommand l'emporte sur GIT_SSH, comme dans Git.
+  assert.equal(nonInteractiveEnv({ sshCommand: 'ssh -i key' }, { GIT_SSH: 'plink.exe' }).GIT_SSH_COMMAND, 'ssh -i key -o BatchMode=yes');
+  // La variante déclarée (ssh.variant ou GIT_SSH_VARIANT) prime sur le nom du programme.
+  assert.equal(nonInteractiveEnv({ sshCommand: 'my-wrapper', sshVariant: 'ssh' }, {}).GIT_SSH_COMMAND, 'my-wrapper -o BatchMode=yes');
+  assert.equal(nonInteractiveEnv({ sshCommand: 'my-wrapper' }, { GIT_SSH_VARIANT: 'putty' }).GIT_SSH_COMMAND, 'my-wrapper -batch');
+  // Client inconnu : laissé tel quel plutôt que de lui passer une option qu'il ne comprendrait pas.
+  assert.equal(nonInteractiveEnv({}, { GIT_SSH: '/usr/local/bin/ssh-wrapper.sh' }).GIT_SSH_COMMAND, undefined);
+});
+
+test('background fetch never runs an inherited askpass program', async (t) => {
+  const { root, repo, service } = await fixture(t);
+  const http = await import('node:http');
+  const server = http.createServer((_request, response) => { response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="test"' }); response.end(); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  git(repo, 'remote', 'add', 'origin', `http://127.0.0.1:${server.address().port}/repo.git`);
+  git(repo, 'config', 'credential.helper', '');
+  const marker = path.join(root, 'askpass-called');
+  const askpass = path.join(root, 'askpass.sh');
+  await writeFile(askpass, `#!/bin/sh\necho called >> '${marker.replaceAll('\\', '/')}'\necho secret\n`);
+  await chmod(askpass, 0o755);
+  const saved = { GIT_ASKPASS: process.env.GIT_ASKPASS, SSH_ASKPASS: process.env.SSH_ASKPASS };
+  process.env.GIT_ASKPASS = askpass;
+  process.env.SSH_ASKPASS = askpass;
+  t.after(() => { for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  await assert.rejects(service.fetch({ background: true }), (error) => error.code === 'fetch-failed');
+  await assert.rejects(readFile(marker, 'utf8'), { code: 'ENOENT' });
+});
+
+test('fetch and pull share a repository lock: background fetches are skipped while one is in flight or queued', async (t) => {
+  const { repo, service, publish } = await trackedFixture(t);
+  const remoteHead = await publish('remote.txt', 'remote advance\n');
+  const first = service.fetch();
+  const pull = service.pull('origin/main');
+  const second = service.fetch();
+  assert.deepEqual(await service.fetch({ background: true }), { skipped: 'in-flight' });
+  // Deux tâches en attente derrière le même fetch ne repartent pas ensemble : aucune n'échoue sur « cannot lock ref ».
+  const [fetched, pulled, refetched] = await Promise.all([first, pull, second]);
+  assert.deepEqual([fetched, refetched], [{ skipped: null }, { skipped: null }]);
+  assert.equal(pulled.pulled, true);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), remoteHead);
+  // Verrou libéré, y compris après un échec.
+  assert.deepEqual(await service.fetch({ background: true }), { skipped: null });
+  git(repo, 'remote', 'set-url', 'origin', path.join(repo, 'missing.git'));
+  await assert.rejects(service.fetch(), (error) => error.code === 'fetch-failed');
+  await assert.rejects(service.fetch({ background: true }), (error) => error.code === 'fetch-failed');
+});
+
+test('pull reports a pruned upstream as missing, not as a divergence', async (t) => {
+  const { repo, service, bare } = await trackedFixture(t);
+  git(repo, 'push', '--quiet', 'origin', 'HEAD:refs/heads/keep');
+  git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/keep');
+  git(bare, 'branch', '-D', 'main');
+  await assert.rejects(service.pull('origin/main'), (error) => error.code === 'upstream-missing');
+});
+
 test('a lost push acknowledgement after remote acceptance remains indeterminate without changing the local tree', async (t) => {
   const { root, repo, service } = await fixture(t);
   const bare = path.join(root, 'remote.git');

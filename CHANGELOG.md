@@ -1,3 +1,16 @@
+# [1.1.0-rc.3](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.2...v1.1.0-rc.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* **worktrees:** fiabiliser renommage distant et gestion des worktrees ([7838dbe](https://github.com/monnierant/git-workbench/commit/7838dbed641e4c421d83c6a55d7fe7454639f094))
+
+
+### Features
+
+* **branches:** renommer une branche locale, et en option sa distante ([7cef227](https://github.com/monnierant/git-workbench/commit/7cef22712cb8a9f7f260f18ee3d29ba5b3d445e1))
+* **worktrees:** lister, créer, ouvrir et supprimer les worktrees ([b869a80](https://github.com/monnierant/git-workbench/commit/b869a80f7a70158f76c60784283582e69556565f))
+
 # [1.1.0-rc.2](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.1...v1.1.0-rc.2) (2026-11-01)
 
 

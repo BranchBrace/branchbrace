@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { buildPartialPatch, PartialStagingError, splitLines } from './partial-staging.js';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
 // Au-delà, un fichier n'est ni affiché dans l'éditeur ni comparé : Monaco resterait utilisable mais la page ralentirait.
@@ -11,6 +12,9 @@ const MAX_EDITABLE = 5 * 1024 * 1024;
 // Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REBASE_ACTIONS = ['pick', 'reword', 'split', 'squash', 'fixup', 'drop'];
+
+// Blob vide : une entrée « intent-to-add » (git add -N) le désigne sans qu'il soit forcément écrit dans les objets.
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 
 // Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
 // Héritées de l'environnement du processus hôte, elles peuvent détourner une
@@ -26,9 +30,9 @@ const DANGEROUS_GIT_ENV_VARS = [
   'GIT_CEILING_DIRECTORIES',
 ];
 
-function sanitizedEnv(extra = {}) {
+function sanitizedEnv(extra = {}, unset = []) {
   const env = { ...process.env, ...extra };
-  for (const name of DANGEROUS_GIT_ENV_VARS) delete env[name];
+  for (const name of [...DANGEROUS_GIT_ENV_VARS, ...unset]) delete env[name];
   return env;
 }
 
@@ -53,7 +57,7 @@ function runGit(cwd, args, options = {}) {
       cwd,
       shell: false,
       windowsHide: true,
-      env: sanitizedEnv(options.env),
+      env: sanitizedEnv(options.env, options.unsetEnv),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];
@@ -85,14 +89,18 @@ function runGit(cwd, args, options = {}) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      // `encoding: 'latin1'` garde les octets exacts (un caractère par octet), quel que soit l'encodage du fichier.
+      const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
     });
   });
 }
 
-function classifyFailure(args, stderr) {
+function classifyFailure(allArgs, stderr) {
+  // Les options `-c clé=valeur` placées avant la sous-commande ne comptent pas pour la reconnaître.
+  let args = allArgs;
+  while (args[0] === '-c') args = args.slice(2);
   const text = stderr.toLowerCase();
   // Une branche ne peut être extraite que dans une seule worktree (« is already used by worktree at », ou
   // « is already checked out at » avant Git 2.42).
@@ -104,8 +112,7 @@ function classifyFailure(args, stderr) {
   if (args[0] === 'push' && (text.includes('rejected') || text.includes('non-fast-forward'))) return 'push-rejected';
   if (args[0] === 'push') return 'push-indeterminate';
   if (args[0] === 'fetch') return 'fetch-failed';
-  if (text.includes('not a git repository')) return 'not-a-repository';
-  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
+  if (text.includes('not a git repository')) return 'not-a-repository';  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
   return 'git-operation-failed';
 }
 
@@ -121,14 +128,49 @@ export class GitWorkbenchError extends Error {
 
 // En-tête de `status --branch` : « ## main...origin/main [ahead 1] », « ## main », « ## HEAD (no branch) »
 // ou « ## No commits yet on main ». Un upstream « [gone] » (branche distante supprimée) compte comme absent.
+// L'avance et le retard sur l'upstream (↑ ahead, ↓ behind) se lisent dans le même en-tête.
 export function parseBranchHeader(header) {
   const text = header.slice(3);
-  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null };
+  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 };
   const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text);
-  if (unborn) return { branch: unborn[1], upstream: null };
+  if (unborn) return { branch: unborn[1], upstream: null, ahead: 0, behind: 0 };
   const [names, tracking = ''] = text.split(' [');
   const [branch, upstream] = names.split('...');
-  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null };
+  const ahead = Number(/ahead (\d+)/.exec(tracking)?.[1] || 0);
+  const behind = Number(/behind (\d+)/.exec(tracking)?.[1] || 0);
+  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null, ahead, behind };
+}
+
+// Options d'un fetch lancé sans action de l'utilisateur. GIT_TERMINAL_PROMPT=0 ne coupe que le terminal : un
+// `core.askPass` vide l'emporte sur tout programme d'invite configuré (et sur SSH_ASKPASS), et
+// `credential.interactive=false` interdit à Git Credential Manager d'ouvrir une fenêtre.
+export const NON_INTERACTIVE_CONFIG = ['-c', 'core.askPass=', '-c', 'credential.interactive=false'];
+// Hérités du processus, ces programmes d'invite ouvriraient une fenêtre d'identifiants à chaque fetch automatique.
+export const INTERACTIVE_ENV_VARS = ['GIT_ASKPASS', 'SSH_ASKPASS'];
+
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+
+// Nom du programme d'une commande SSH (« "C:\PuTTY\plink.exe" -v » → « plink »), comme Git le lit pour deviner le client.
+function sshProgramName(command) {
+  const match = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(command);
+  const program = match ? match[1] ?? match[2] ?? match[3] : '';
+  return path.posix.basename(program.replaceAll('\\', '/')).toLowerCase().replace(/\.exe$/, '');
+}
+
+// Environnement du fetch d'arrière-plan : aucune invite d'identifiants ne doit bloquer ni ouvrir de fenêtre. Un helper
+// qui a déjà le secret le fournit toujours. La commande SSH effective est calculée avec la priorité de Git
+// (GIT_SSH_COMMAND, puis core.sshCommand, puis GIT_SSH) puis rendue non interactive selon le client : BatchMode pour
+// OpenSSH, `-batch` pour plink/PuTTY (TortoisePlink le reçoit déjà de Git). Un client inconnu n'est pas modifié.
+export function nonInteractiveEnv({ sshCommand = null, sshVariant = null } = {}, environment = process.env) {
+  const env = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never' };
+  const command = environment.GIT_SSH_COMMAND || sshCommand || (environment.GIT_SSH ? shellQuote(environment.GIT_SSH) : 'ssh');
+  const name = sshProgramName(command);
+  const variant = (environment.GIT_SSH_VARIANT || sshVariant || '').toLowerCase()
+    || ({ ssh: 'ssh', plink: 'plink', tortoiseplink: 'tortoiseplink' })[name] || 'auto';
+  if (variant === 'plink' || variant === 'putty') Object.assign(env, { GIT_SSH_COMMAND: `${command} -batch`, GIT_SSH_VARIANT: variant });
+  else if (variant === 'tortoiseplink') Object.assign(env, { GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: variant });
+  else if (variant === 'ssh') env.GIT_SSH_COMMAND = `${command} -o BatchMode=yes`;
+  return env;
 }
 
 function parseStatus(raw) {
@@ -270,9 +312,39 @@ export class GitService {
 
   // Récupère les branches de tous les dépôts distants. `--prune` retire les copies locales des branches supprimées
   // côté serveur : seules des références de suivi changent, jamais une branche locale ni l'arbre de travail.
-  async fetch() {
-    await this.#ensureRepositoryPath();
-    await runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules']);
+  // En arrière-plan (`background`), le fetch est sauté si un fetch ou un pull est en cours ou attend son tour, ou si
+  // une opération Git (rebase, merge, cherry-pick) attend d'être terminée, et ne peut jamais demander d'identifiants.
+  // Le test « en vol » et la prise du verrou sont synchrones : aucun appel ne peut se glisser entre les deux.
+  fetch({ background = false } = {}) {
+    if (background && this.#syncPending) return Promise.resolve({ skipped: 'in-flight' });
+    return this.#exclusiveSync(async () => {
+      await this.#ensureRepositoryPath();
+      if (background) {
+        const operation = await this.operation();
+        if (operation) return { skipped: 'operation', operation };
+      }
+      const args = ['fetch', '--all', '--prune', '--no-recurse-submodules'];
+      if (!background) await runGit(this.repositoryPath, args);
+      else await runGit(this.repositoryPath, [...NON_INTERACTIVE_CONFIG, ...args], { env: nonInteractiveEnv(await this.#sshSettings()), unsetEnv: INTERACTIVE_ENV_VARS });
+      return { skipped: null };
+    });
+  }
+
+  // Fetch et pull écrivent les mêmes références de suivi : ils passent un par un dans l'ordre d'arrivée (deux fetch
+  // simultanés échoueraient sur « cannot lock ref »). `#syncPending` compte les tâches en cours ou en attente.
+  #syncQueue = Promise.resolve();
+  #syncPending = 0;
+  #exclusiveSync(task) {
+    this.#syncPending += 1;
+    const run = this.#syncQueue.then(task).finally(() => { this.#syncPending -= 1; });
+    this.#syncQueue = run.catch(() => {});
+    return run;
+  }
+
+  async #sshSettings() {
+    const read = (key) => runGit(this.repositoryPath, ['config', '--get', key], { acceptExitCodes: [1] }).then((value) => value.trim() || null);
+    const [sshCommand, sshVariant] = await Promise.all([read('core.sshCommand'), read('ssh.variant')]);
+    return { sshCommand, sshVariant };
   }
 
   // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.
@@ -363,6 +435,14 @@ export class GitService {
     await runGit(this.repositoryPath, ['reset', '--', filePath]);
     return this.status();
   }
+
+  // Indexation partielle (A3). `request` décrit le diff affiché : `original` et `modified` tels que renvoyés par
+  // workingVersions, `changes` les blocs calculés par Monaco, `selection` les lignes choisies de chaque côté. Le patch
+  // passe par `git apply --cached` ; l'index est ensuite relu et restauré s'il diffère du résultat attendu.
+  // L'arbre de travail n'est jamais modifié (A11).
+  async stageLines(filePath, request) { return this.#applyLines(filePath, request, 'stage'); }
+
+  async unstageLines(filePath, request) { return this.#applyLines(filePath, request, 'unstage'); }
 
   async stageAll() {
     await this.#ensureRepositoryPath();
@@ -910,7 +990,12 @@ export class GitService {
 
   // Pull explicite : fetch du dépôt distant de l'upstream, puis fast-forward seul. Si la branche a aussi des commits
   // absents de l'upstream (divergence), rien n'est intégré : l'écart revient pour proposer un merge ou un rebase.
-  async pull(expectedUpstream) {
+  // Il attend tout fetch en cours (même verrou) : un fetch d'arrière-plan ne tourne jamais en même temps.
+  pull(expectedUpstream) {
+    return this.#exclusiveSync(() => this.#pullNow(expectedUpstream));
+  }
+
+  async #pullNow(expectedUpstream) {
     await this.#ensureRepositoryPath();
     if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
     const read = (args) => runGit(this.repositoryPath, args).then((text) => text.trim(), () => '');
@@ -929,6 +1014,8 @@ export class GitService {
     const recoveryRef = await this.#saveRecoveryRef('pull');
     try { await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-squash', target]); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef); }
+    // Succès annoncé seulement si la branche pointe bien sur le commit de l'upstream récupéré.
+    if (await read(['rev-parse', 'HEAD']) !== target) throw new GitWorkbenchError('pull-verification-failed', recoveryRef);
     return { upstream, ahead, behind, pulled: true, diverged: false, recoveryRef };
   }
 
@@ -952,12 +1039,120 @@ export class GitService {
   }
 
   // Contenu d'un blob (`HEAD:chemin`, `:chemin` pour l'index, `:2:chemin` pour un côté de conflit) ; null s'il n'existe pas.
-  async #blob(spec) {
+  async #blob(spec, encoding = 'utf8') {
     if (spec.includes('\0')) throw new GitWorkbenchError('invalid-path');
-    return runGit(this.repositoryPath, ['cat-file', 'blob', spec]).catch((error) => {
+    return runGit(this.repositoryPath, ['cat-file', 'blob', spec], { encoding }).catch((error) => {
       if (error.code === 'git-output-too-large') throw error;
       return null;
     });
+  }
+
+  // Les deux côtés du diff relus en octets exacts (latin1) : index → fichier pour indexer, HEAD → index pour désindexer.
+  // Le fichier de travail est lu tel que `git add` le verrait (filtres et conversion des fins de ligne appliqués).
+  async #partialSides(filePath, entry, stage) {
+    const [indexEntry, headEntry] = await Promise.all([
+      this.#indexEntry(filePath),
+      stage ? null : runGit(this.repositoryPath, ['ls-tree', '-z', 'HEAD', '--', filePath]).then((raw) => {
+        const [info, name] = raw.split('\0')[0].split('\t');
+        return name === filePath ? { mode: info.split(' ')[0] } : null;
+      }, () => null),
+    ]);
+    const indexContent = indexEntry ? (indexEntry.sha === EMPTY_BLOB ? '' : await this.#blob(indexEntry.sha, 'latin1')) : null;
+    if (!stage) {
+      const left = headEntry ? await this.#blob(`HEAD:${filePath}`, 'latin1') : null;
+      return { left, right: indexContent, displayedRight: indexContent, fileMode: indexEntry?.mode ?? headEntry?.mode };
+    }
+    if (entry.worktreeStatus === 'D') return { left: indexContent, right: null, displayedRight: null, fileMode: indexEntry?.mode };
+    const absolute = await this.#workingPath(filePath);
+    // lstat : un lien symbolique n'est pas un fichier texte à découper en lignes.
+    const info = await lstat(absolute);
+    if (!info.isFile() || info.size > MAX_EDITABLE) throw new GitWorkbenchError('partial-staging-unsupported');
+    const raw = (await readFile(absolute)).toString('latin1');
+    const sha = (await runGit(this.repositoryPath, ['hash-object', '-w', '--', filePath])).trim();
+    const right = await this.#blob(sha, 'latin1');
+    // Un filtre qui change autre chose que les fins de ligne (LFS, ident…) : les lignes affichées ne sont pas celles
+    // que Git indexerait.
+    if (right === null || splitLines(raw).texts.join('\n') !== splitLines(right).texts.join('\n')) throw new GitWorkbenchError('partial-staging-unsupported');
+    const executable = process.platform !== 'win32' && (info.mode & 0o111) !== 0;
+    return { left: indexContent, right, displayedRight: raw, fileMode: indexEntry?.mode ?? (executable ? '100755' : '100644') };
+  }
+
+  async #applyLines(filePath, request, mode) {
+    const entry = await this.#statusEntry(filePath);
+    if (entry.conflicted || entry.originalPath) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (typeof request?.original !== 'string' || typeof request?.modified !== 'string') throw new GitWorkbenchError('invalid-content');
+    const stage = mode === 'stage';
+    const { left, right, displayedRight, fileMode } = await this.#partialSides(filePath, entry, stage);
+    if (isBinary(left) || isBinary(right) || (fileMode !== '100644' && fileMode !== '100755')) throw new GitWorkbenchError('partial-staging-unsupported');
+    // Le diff affiché doit être exactement celui du disque : sinon les numéros de ligne choisis ne désignent plus rien.
+    const decode = (text) => Buffer.from(text ?? '', 'latin1').toString('utf8');
+    if (decode(left) !== request.original || decode(displayedRight) !== request.modified) throw new GitWorkbenchError('diff-outdated');
+    let plan;
+    try {
+      plan = buildPartialPatch({ path: filePath, mode, left, right, changes: request.changes, selection: request.selection, fileMode });
+    } catch (error) {
+      if (error instanceof PartialStagingError) throw new GitWorkbenchError(error.code);
+      throw error;
+    }
+
+    const gitDirectory = await this.#gitDirectory();
+    const indexPath = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-path', 'index'])).trim());
+    const before = await this.#stagedRecords();
+    const backup = await readFile(indexPath).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+    const patchPath = path.join(gitDirectory, `git-workbench-partial-${randomUUID()}.patch`);
+    await writeFile(patchPath, Buffer.from(plan.patch, 'latin1'), { mode: 0o600 });
+    try {
+      // --whitespace=nowarn : une configuration apply.whitespace=fix ne doit pas retoucher les lignes choisies.
+      // core.longpaths : sous Windows, le chemin du patch dans un dépôt profond dépasse vite 260 caractères.
+      await runGit(this.repositoryPath, ['-c', 'core.longpaths=true', 'apply', '--cached', '--whitespace=nowarn', ...(stage ? [] : ['--reverse']), patchPath]);
+    } catch {
+      // `git apply` est atomique : en cas de refus, l'index n'a pas été touché.
+      throw new GitWorkbenchError('partial-apply-failed');
+    } finally {
+      await rm(patchPath, { force: true });
+    }
+    if (await this.#indexMatches(filePath, before, { ...plan, fileMode })) return this.status();
+    try {
+      if (backup === null) await rm(indexPath, { force: true });
+      else {
+        const temporary = `${indexPath}.git-workbench-restore`;
+        await writeFile(temporary, backup);
+        await rename(temporary, indexPath);
+      }
+    } catch {
+      throw new GitWorkbenchError('partial-restore-failed');
+    }
+    throw new GitWorkbenchError('partial-verification-failed');
+  }
+
+  async #indexEntry(filePath) {
+    const raw = await runGit(this.repositoryPath, ['ls-files', '--stage', '-z', '--', `:(literal)${filePath}`]);
+    for (const record of raw.split('\0')) {
+      const [info, name] = record.split('\t');
+      if (name === filePath) { const [mode, sha] = info.split(' '); return { mode, sha }; }
+    }
+    return null;
+  }
+
+  // Ce que `git diff --cached` rapporte pour chaque chemin (modes et objets avant/après, statut).
+  async #stagedRecords() {
+    const fields = (await runGit(this.repositoryPath, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff'])).split('\0');
+    const records = new Map();
+    for (let i = 0; i + 1 < fields.length; i += 2) records.set(fields[i + 1], fields[i].replace(/^\n/, ''));
+    return records;
+  }
+
+  // Garde de fiabilité : seuls le chemin visé et son contenu attendu ont changé dans l'index.
+  async #indexMatches(filePath, before, expected) {
+    const after = await this.#stagedRecords();
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+      if (key !== filePath && before.get(key) !== after.get(key)) return false;
+    }
+    const entry = await this.#indexEntry(filePath);
+    if (!expected.exists) return entry === null;
+    if (!entry || entry.mode !== expected.fileMode) return false;
+    const content = entry.sha === EMPTY_BLOB ? '' : await this.#blob(entry.sha, 'latin1');
+    return content === expected.content;
   }
 
   #versions(original, modified, { editable }) {

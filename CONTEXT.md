@@ -1,4 +1,4 @@
-# Git Workbench
+# BranchBrace
 
 Client Git de bureau, local, pour un développeur solo à l'aise avec Git. Chaque action qui modifie un dépôt est explicite et doit pouvoir être annulée.
 

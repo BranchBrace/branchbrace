@@ -6,7 +6,7 @@ import path from 'node:path';
 import { readSyncSettings, writeSyncSettings } from '../src/sync-settings.js';
 
 async function settingsFile(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-sync-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-sync-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return path.join(root, 'nested', 'sync.json');
 }

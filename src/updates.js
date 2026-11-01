@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { open, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { GitWorkbenchError } from './git.js';
+import { BranchBraceError } from './git.js';
 
 // Mises à jour depuis les releases GitHub publiques du projet. Seule l'API des releases est contactée, sans identifiant
 // ni donnée de dépôt, et uniquement sur demande (menu) ou si l'utilisateur a activé la vérification au démarrage.
@@ -26,7 +26,7 @@ export function parseVersion(text) {
 export function compareVersions(left, right) {
   const a = parseVersion(left);
   const b = parseVersion(right);
-  if (!a || !b) throw new GitWorkbenchError('invalid-version');
+  if (!a || !b) throw new BranchBraceError('invalid-version');
   for (let index = 0; index < 3; index += 1) if (a.core[index] !== b.core[index]) return Math.sign(a.core[index] - b.core[index]);
   if (!a.prerelease.length || !b.prerelease.length) return Math.sign(b.prerelease.length - a.prerelease.length);
   for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
@@ -65,7 +65,7 @@ function installerOf(release, platform) {
 }
 
 export async function checkForUpdate({ currentVersion, channel, platform = process.platform, fetch = globalThis.fetch }) {
-  if (!CHANNELS.includes(channel)) throw new GitWorkbenchError('invalid-update-channel');
+  if (!CHANNELS.includes(channel)) throw new BranchBraceError('invalid-update-channel');
   let releases;
   try {
     const response = await fetch(RELEASES_API, {
@@ -74,7 +74,7 @@ export async function checkForUpdate({ currentVersion, channel, platform = proce
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     releases = await response.json();
-  } catch { throw new GitWorkbenchError('update-check-failed'); }
+  } catch { throw new BranchBraceError('update-check-failed'); }
   const release = selectRelease(releases, channel);
   const latest = release && {
     version: release.tag_name.replace(/^v/, ''),
@@ -92,7 +92,7 @@ export async function checkForUpdate({ currentVersion, channel, platform = proce
 // Le délai d'inactivité est réarmé à chaque bloc reçu : un téléchargement lent mais actif n'est pas interrompu.
 export async function downloadInstaller(installer, directory, { fetch = globalThis.fetch, onProgress = () => {}, idleTimeout = DOWNLOAD_IDLE_TIMEOUT } = {}) {
   if (!installer?.url?.startsWith(DOWNLOADS) || !installer.checksumUrl?.startsWith(DOWNLOADS) || path.basename(installer.name) !== installer.name) {
-    throw new GitWorkbenchError('update-download-failed');
+    throw new BranchBraceError('update-download-failed');
   }
   await mkdir(directory, { recursive: true });
   const target = path.join(directory, installer.name);
@@ -124,12 +124,12 @@ export async function downloadInstaller(installer, directory, { fetch = globalTh
     } finally { await file.close(); }
     if (hash.digest('hex') !== expected) {
       await rm(target, { force: true });
-      throw new GitWorkbenchError('update-checksum-mismatch');
+      throw new BranchBraceError('update-checksum-mismatch');
     }
   } catch (error) {
     await rm(target, { force: true });
-    if (error instanceof GitWorkbenchError) throw error;
-    throw new GitWorkbenchError('update-download-failed');
+    if (error instanceof BranchBraceError) throw error;
+    throw new BranchBraceError('update-download-failed');
   } finally { clearTimeout(idle); }
   return target;
 }
@@ -149,7 +149,7 @@ export async function readUpdateSettings(file, currentVersion) {
 export async function writeUpdateSettings(file, currentVersion, changes) {
   const settings = await readUpdateSettings(file, currentVersion);
   if (changes?.channel !== undefined) {
-    if (!CHANNELS.includes(changes.channel)) throw new GitWorkbenchError('invalid-update-channel');
+    if (!CHANNELS.includes(changes.channel)) throw new BranchBraceError('invalid-update-channel');
     settings.channel = changes.channel;
   }
   if (changes?.checkOnStartup !== undefined) settings.checkOnStartup = changes.checkOnStartup === true;

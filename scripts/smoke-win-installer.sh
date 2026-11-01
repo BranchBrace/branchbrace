@@ -3,7 +3,7 @@
 #
 # This does NOT perform a real install/launch/uninstall. electron-builder's NSIS
 # template guards against a second instance via a Windows RPC/DCOM named-pipe check;
-# Wine's incomplete RPC/DCOM support makes that check misfire ("Git Workbench is
+# Wine's incomplete RPC/DCOM support makes that check misfire ("BranchBrace is
 # running" / stuck on a Retry loop that never clears), so a full silent install
 # cannot be automated reliably in this environment. See docs/adr/0003-windows-installer.md
 # for the wine diagnostic evidence (GUI wizard screens captured and inspected).
@@ -15,7 +15,7 @@ set -eu
 exe="${1:-}"
 if [ -z "$exe" ]; then exe=$(ls artifacts/*.exe 2>/dev/null | head -n 1 || true); fi
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-  echo "usage: $0 path/to/Git Workbench Setup <version>.exe" >&2
+  echo "usage: $0 path/to/BranchBrace Setup <version>.exe" >&2
   exit 2
 fi
 

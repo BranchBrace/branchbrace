@@ -5,10 +5,10 @@ set -eu
 
 deb="${1:-}"
 if [ -z "$deb" ]; then deb=$(ls artifacts/*.deb 2>/dev/null | head -n 1 || true); fi
-if [ -z "$deb" ] || [ ! -f "$deb" ]; then echo "usage: $0 path/to/git-workbench_<version>_amd64.deb" >&2; exit 2; fi
+if [ -z "$deb" ] || [ ! -f "$deb" ]; then echo "usage: $0 path/to/branchbrace_<version>_amd64.deb" >&2; exit 2; fi
 dir=$(cd "$(dirname "$deb")" && pwd)
 name=$(basename "$deb")
-image="${GIT_WORKBENCH_SMOKE_IMAGE:-debian:trixie}"
+image="${BRANCHBRACE_SMOKE_IMAGE:-debian:trixie}"
 
 (cd "$dir" && sha256sum "$name" > "$name.sha256")
 echo "Checksum: $(cat "$dir/$name.sha256")"
@@ -24,22 +24,22 @@ docker run --rm --network bridge --security-opt seccomp=unconfined --security-op
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends xvfb xauth ca-certificates >/dev/null
   apt-get install -y -qq --no-install-recommends "/pkg/$DEB" >/dev/null
-  dpkg -s git-workbench | grep -E "^(Package|Status|Version|Architecture|Depends):"
-  command -v git-workbench
-  test -f /usr/share/applications/git-workbench.desktop && echo "Desktop entry installed."
-  echo "chrome-sandbox mode: $(stat -c %a "/opt/Git Workbench/chrome-sandbox") (755 = user-namespace sandbox)"
+  dpkg -s branchbrace | grep -E "^(Package|Status|Version|Architecture|Depends):"
+  command -v branchbrace
+  test -f /usr/share/applications/branchbrace.desktop && echo "Desktop entry installed."
+  echo "chrome-sandbox mode: $(stat -c %a "/opt/BranchBrace/chrome-sandbox") (755 = user-namespace sandbox)"
 
   useradd -m tester
   su tester -c "git init -q -b main /home/tester/sample && cd /home/tester/sample \
     && git config user.name Smoke && git config user.email smoke@example.invalid \
     && for n in base first \"installer smoke\"; do git commit -q --allow-empty -m \"\$n\"; done"
-  su tester -c "cd /home/tester && GIT_WORKBENCH_SMOKE=1 GIT_WORKBENCH_SMOKE_REPO=/home/tester/sample GIT_WORKBENCH_SMOKE_REWRITE=1 \
-    ELECTRON_DISABLE_GPU=1 timeout 120 xvfb-run -a git-workbench --disable-gpu 2>/tmp/stderr.log" || { echo "Launch failed:"; tail -n 20 /tmp/stderr.log; exit 1; }
+  su tester -c "cd /home/tester && BRANCHBRACE_SMOKE=1 BRANCHBRACE_SMOKE_REPO=/home/tester/sample BRANCHBRACE_SMOKE_REWRITE=1 \
+    ELECTRON_DISABLE_GPU=1 timeout 120 xvfb-run -a branchbrace --disable-gpu 2>/tmp/stderr.log" || { echo "Launch failed:"; tail -n 20 /tmp/stderr.log; exit 1; }
 
-  apt-get purge -y -qq git-workbench >/dev/null
-  if dpkg -s git-workbench >/dev/null 2>&1; then echo "Package still installed" >&2; exit 1; fi
-  for leftover in "/opt/Git Workbench" /usr/bin/git-workbench /usr/share/applications/git-workbench.desktop; do
+  apt-get purge -y -qq branchbrace >/dev/null
+  if dpkg -s branchbrace >/dev/null 2>&1; then echo "Package still installed" >&2; exit 1; fi
+  for leftover in "/opt/BranchBrace" /usr/bin/branchbrace /usr/share/applications/branchbrace.desktop; do
     if [ -e "$leftover" ]; then echo "Leftover after purge: $leftover" >&2; exit 1; fi
   done
-  echo "Purged cleanly: package, /opt/Git Workbench, launcher and desktop entry removed."
+  echo "Purged cleanly: package, /opt/BranchBrace, launcher and desktop entry removed."
 '

@@ -1,6 +1,6 @@
 # Notices tierces
 
-Git Workbench est distribué sous licence propriétaire (voir `LICENSE`). Il inclut les composants tiers ci-dessous,
+BranchBrace est distribué sous licence propriétaire (voir `LICENSE`). Il inclut les composants tiers ci-dessous,
 chacun sous sa propre licence, reproduite telle quelle.
 
 ## vscode-textmate — MIT

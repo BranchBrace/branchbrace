@@ -16,7 +16,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-features-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-features-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');

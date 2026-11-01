@@ -9,13 +9,13 @@ sur une vraie machine Windows. C'est la vérification que tu as choisi de faire 
 
 Sur https://github.com/MonniHermes/git-workbench/releases, prendre la **dernière
 pré-release** (tag `vX.Y.Z-rc.N`) et télécharger :
-- `Git Workbench Setup <version>.exe`
-- `Git Workbench Setup <version>.exe.sha256`
+- `BranchBrace Setup <version>.exe`
+- `BranchBrace Setup <version>.exe.sha256`
 
 ## 2. Vérifier l'empreinte (PowerShell)
 
 ```powershell
-Get-FileHash ".\Git Workbench Setup <version>.exe" -Algorithm SHA256
+Get-FileHash ".\BranchBrace Setup <version>.exe" -Algorithm SHA256
 ```
 
 Comparer la valeur affichée au contenu du fichier `.sha256` téléchargé : elles doivent
@@ -32,11 +32,11 @@ dysfonctionnement.
 Vérifier pendant l'assistant :
 - Le titre affiche bien la version RC attendue.
 - L'écran d'installation ne demande **pas** les droits administrateur (installation par
-  utilisateur, chemin par défaut sous `%LOCALAPPDATA%\Programs\Git Workbench`).
+  utilisateur, chemin par défaut sous `%LOCALAPPDATA%\Programs\BranchBrace`).
 
 ## 4. Lancer et tester
 
-- Lancer « Git Workbench » depuis le menu Démarrer ou le raccourci bureau.
+- Lancer « BranchBrace » depuis le menu Démarrer ou le raccourci bureau.
 - Ouvrir un dépôt Git existant (ou en créer un jetable).
 - Faire un commit, puis un **rebase interactif** (réordonner/squasher deux commits) :
   c'est le correctif packagé de MON-645 que cette tranche doit confirmer sous Windows.
@@ -44,8 +44,8 @@ Vérifier pendant l'assistant :
 
 ## 5. Désinstaller
 
-Paramètres > Applications > Applications installées > « Git Workbench » > Désinstaller.
-Vérifier ensuite que `%LOCALAPPDATA%\Programs\Git Workbench` n'existe plus.
+Paramètres > Applications > Applications installées > « BranchBrace » > Désinstaller.
+Vérifier ensuite que `%LOCALAPPDATA%\Programs\BranchBrace` n'existe plus.
 
 ## 6. Rapporter le résultat
 

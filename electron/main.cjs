@@ -3,11 +3,22 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { GitService, GitWorkbenchError, samePath } = require('../src/git.js');
+const { GitService, BranchBraceError, samePath } = require('../src/git.js');
 const updates = require('../src/updates.js');
 const extensions = require('../src/extensions.js');
 const syncSettings = require('../src/sync-settings.js');
 const { fetchFavicon } = require('../src/favicon.js');
+
+// Données de l'ancien nom (session, réglages, extensions importées) : reprises une fois, au premier lancement sous
+// BranchBrace, avant toute lecture. L'ancien dossier est laissé en place.
+try {
+  const legacyUserData = path.join(app.getPath('appData'), 'Git Workbench'); // ancien nom
+  if (!fs.existsSync(app.getPath('userData')) && fs.existsSync(legacyUserData)) {
+    fs.cpSync(legacyUserData, app.getPath('userData'), { recursive: true, filter: (source) => !/[\\/](Cache|Code Cache|GPUCache|Crashpad)$/.test(source) });
+  }
+} catch (error) {
+  console.warn('Reprise des données de l’ancien nom impossible :', error);
+}
 
 let mainWindow;
 const repositories = new Map();
@@ -52,7 +63,7 @@ function handle(channel, handler) {
   ipcMain.handle(channel, async (...args) => {
     try { return await handler(...args); }
     catch (error) {
-      if (!(error instanceof GitWorkbenchError)) throw error;
+      if (!(error instanceof BranchBraceError)) throw error;
       return { workbenchError: { code: error.code, recoveryRef: error.recoveryRef, operation: error.operation } };
     }
   });
@@ -65,7 +76,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#070c1d',
-    title: 'Git Workbench',
+    title: 'BranchBrace',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -81,12 +92,12 @@ function createWindow() {
     if (!allowed) event.preventDefault();
   });
   mainWindow.webContents.once('did-finish-load', async () => {
-    if (process.env.GIT_WORKBENCH_SMOKE === '1') {
-      const ready = await mainWindow.webContents.executeJavaScript("document.title === 'Git Workbench' && Boolean(window.workbench)");
+    if (process.env.BRANCHBRACE_SMOKE === '1') {
+      const ready = await mainWindow.webContents.executeJavaScript("document.title === 'BranchBrace' && Boolean(window.workbench)");
       console.log(ready ? 'Desktop window and isolated preload loaded.' : 'Desktop smoke check failed.');
-      if (!ready || !process.env.GIT_WORKBENCH_SMOKE_REPO) return app.exit(ready ? 0 : 1);
+      if (!ready || !process.env.BRANCHBRACE_SMOKE_REPO) return app.exit(ready ? 0 : 1);
       try {
-        const candidate = new GitService(process.env.GIT_WORKBENCH_SMOKE_REPO);
+        const candidate = new GitService(process.env.BRANCHBRACE_SMOKE_REPO);
         await candidate.verifyRepository();
         repositories.set(candidate.repositoryPath, candidate);
         const summary = await mainWindow.webContents.executeJavaScript(
@@ -94,7 +105,7 @@ function createWindow() {
         );
         console.log(`Repository read through preload IPC: ${JSON.stringify(summary)}`);
         if (summary.commits === 0) return app.exit(1);
-        if (process.env.GIT_WORKBENCH_SMOKE_REWRITE === '1') {
+        if (process.env.BRANCHBRACE_SMOKE_REWRITE === '1') {
           // Disposable repositories only: exercises the packaged GIT_SEQUENCE_EDITOR path (pick newest, drop the other).
           const before = await candidate.history();
           const base = before[2].hash;
@@ -120,7 +131,7 @@ function createWindow() {
 // Ouvre un terminal dans le dossier du dépôt. Le chemin passe par `cwd`, jamais par une ligne de commande à interpréter.
 function openTerminal(cwd) {
   const attempts = process.platform === 'win32'
-    ? [['wt.exe', ['-d', '.']], ['cmd.exe', ['/c', 'start', 'Git Workbench', 'cmd.exe']]]
+    ? [['wt.exe', ['-d', '.']], ['cmd.exe', ['/c', 'start', 'BranchBrace', 'cmd.exe']]]
     : process.platform === 'darwin'
       ? [['open', ['-a', 'Terminal', '.']]]
       : [['x-terminal-emulator', []], ['gnome-terminal', []], ['konsole', []], ['xterm', []]];
@@ -138,7 +149,7 @@ function openTerminal(cwd) {
 
 function service(root) {
   const repository = repositories.get(root);
-  if (!repository) throw new GitWorkbenchError('repository-not-open');
+  if (!repository) throw new BranchBraceError('repository-not-open');
   return repository;
 }
 
@@ -186,7 +197,7 @@ app.whenReady().then(() => {
     return snapshot(root);
   });
   handle('session:restore', async () => {
-    if (process.env.GIT_WORKBENCH_SMOKE === '1') return { tabs: [], active: null, snapshot: null };
+    if (process.env.BRANCHBRACE_SMOKE === '1') return { tabs: [], active: null, snapshot: null };
     const saved = readSession();
     for (const candidatePath of saved.tabs) {
       try {
@@ -256,7 +267,7 @@ Un point de récupération local sera conservé.`)) return null;
   handle('shell:show-file', async (_event, { root, path: filePath }) => {
     service(root);
     const absolute = path.resolve(root, filePath);
-    if (!absolute.startsWith(root + path.sep)) throw new GitWorkbenchError('invalid-path');
+    if (!absolute.startsWith(root + path.sep)) throw new BranchBraceError('invalid-path');
     shell.showItemInFolder(absolute);
     return true;
   });
@@ -264,7 +275,7 @@ Un point de récupération local sera conservé.`)) return null;
   // Page web d'un dépôt distant ou d'une branche : l'URL est recalculée ici depuis la configuration Git, jamais reçue de la page.
   handle('shell:open-remote', async (_event, { root, remote, branch }) => {
     const target = (await service(root).references()).remotes.find((item) => item.name === remote);
-    if (!target?.web) throw new GitWorkbenchError('remote-no-web');
+    if (!target?.web) throw new BranchBraceError('remote-no-web');
     const suffix = typeof branch === 'string' && branch ? (target.provider === 'gitlab' ? '/-/tree/' : '/tree/') + branch.split('/').map(encodeURIComponent).join('/') : '';
     await shell.openExternal(target.web + suffix);
     return true;
@@ -290,8 +301,8 @@ Un point de récupération local sera conservé.`)) return null;
   handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));
   handle('repository:push', async (_event, { root, upstream }) => {
     const state = await service(root).status();
-    if (!state.upstream) throw new GitWorkbenchError('upstream-missing');
-    if (upstream !== state.upstream) throw new GitWorkbenchError('upstream-changed');
+    if (!state.upstream) throw new BranchBraceError('upstream-missing');
+    if (upstream !== state.upstream) throw new BranchBraceError('upstream-changed');
     if (!await confirm('Envoyer les commits ?', `Git va pousser vers ${upstream}. Le credential helper ou SSH configuré sera utilisé. Aucun force-push ne sera effectué.`)) return null;
     return service(root).push(upstream);
   });
@@ -318,7 +329,7 @@ Un point de récupération local conservera ces commits.`)) return null;
   handle('repository:remote:set-url', async (_event, { root, name, url }) => service(root).setRemoteUrl(name, url));
   handle('repository:remote:remove', async (_event, { root, name }) => {
     const target = (await service(root).remotes()).find((item) => item.name === name);
-    if (!target) throw new GitWorkbenchError('remote-not-found');
+    if (!target) throw new BranchBraceError('remote-not-found');
     const refs = await service(root).references();
     const followed = new Set(refs.remote.filter((ref) => ref.remote === name).map((ref) => ref.name));
     const orphans = refs.local.filter((ref) => followed.has(ref.upstream)).map((ref) => ref.name);
@@ -336,7 +347,7 @@ Pour le rajouter plus tard, il faudra cette URL.`)) return null;
   handle('repository:branch:rename', async (_event, { root, name, newName, remote }) => {
     if (remote === true) {
       const branch = (await service(root).references()).local.find((item) => item.name === name);
-      if (!branch?.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+      if (!branch?.upstream || branch.gone) throw new BranchBraceError('upstream-missing');
       if (!await confirm('Renommer aussi la branche distante ?', `« ${name} » deviendra « ${newName} » en local et sur le dépôt distant de ${branch.upstream} :
 
 1. push de « ${newName} » (nouvelle branche distante, aucun force-push) puis vérification ;
@@ -364,7 +375,7 @@ Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivr
   // Ouvre une worktree du dépôt dans un onglet : seules celles que Git liste pour ce dépôt sont acceptées.
   handle('repository:worktree:open', async (_event, { root, path: target }) => {
     const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
-    if (!worktree || worktree.prunable || worktree.bare) throw new GitWorkbenchError('worktree-not-found');
+    if (!worktree || worktree.prunable || worktree.bare) throw new BranchBraceError('worktree-not-found');
     const opened = [...repositories.keys()].find((key) => samePath(key, worktree.path));
     if (opened) { writeSession(opened); return snapshot(opened); }
     const candidate = new GitService(worktree.path);
@@ -375,7 +386,7 @@ Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivr
   });
   handle('repository:worktree:remove', async (_event, { root, path: target }) => {
     const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
-    if (!worktree) throw new GitWorkbenchError('worktree-not-found');
+    if (!worktree) throw new BranchBraceError('worktree-not-found');
     const kept = worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : '';
     const confirmed = worktree.prunable
       ? await confirm('Oublier la worktree introuvable ?', `Le dossier ${worktree.path} est introuvable : Git va oublier cette seule worktree${kept}.
@@ -409,8 +420,8 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
   handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
   handle('repository:tag:push', async (_event, { root, name, remote }) => {
     const refs = await service(root).references();
-    if (!refs.tags.some((tag) => tag.name === name)) throw new GitWorkbenchError('tag-not-found');
-    if (!refs.remotes.some((item) => item.name === remote)) throw new GitWorkbenchError('remote-not-found');
+    if (!refs.tags.some((tag) => tag.name === name)) throw new BranchBraceError('tag-not-found');
+    if (!refs.remotes.some((item) => item.name === remote)) throw new BranchBraceError('remote-not-found');
     if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
     return service(root).pushTag(name, remote);
   });
@@ -418,12 +429,12 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
   // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
   handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));
   handle('repository:merge', async (_event, { root, source, target, fastForward }) => {
-    if (typeof target !== 'string' || !target) throw new GitWorkbenchError('merge-source-changed');
+    if (typeof target !== 'string' || !target) throw new BranchBraceError('merge-source-changed');
     return service(root).merge(source, { fastForward: fastForward === true, expectedTarget: target });
   });
   // Pull explicite vers l'upstream affiché : fetch puis fast-forward seul. Une divergence revient sans rien intégrer.
   handle('repository:pull', async (_event, { root, upstream }) => {
-    if (typeof upstream !== 'string' || !upstream) throw new GitWorkbenchError('upstream-missing');
+    if (typeof upstream !== 'string' || !upstream) throw new BranchBraceError('upstream-missing');
     return service(root).pull(upstream);
   });
   handle('repository:rebase', async (_event, { root, upstream }) => {
@@ -487,24 +498,24 @@ Un point de récupération local sera conservé ; « Annuler » revient à l’�
   });
   handle('updates:install', async () => {
     const latest = lastUpdateCheck?.available ? lastUpdateCheck.latest : null;
-    if (!latest) throw new GitWorkbenchError('update-not-available');
+    if (!latest) throw new BranchBraceError('update-not-available');
     if (!latest.installer || !app.isPackaged) {
       await shell.openExternal(latest.page);
       return { opened: latest.page };
     }
-    if (updateInProgress) throw new GitWorkbenchError('update-in-progress');
-    if (!await confirm(`Installer la version ${latest.version} ?`, `L’installateur ${latest.installer.name} va être téléchargé depuis GitHub (${Math.round(latest.installer.size / 1048576)} Mo) et son empreinte SHA-256 vérifiée. Git Workbench se fermera ensuite pour laisser l’installateur remplacer la version ${app.getVersion()}.
+    if (updateInProgress) throw new BranchBraceError('update-in-progress');
+    if (!await confirm(`Installer la version ${latest.version} ?`, `L’installateur ${latest.installer.name} va être téléchargé depuis GitHub (${Math.round(latest.installer.size / 1048576)} Mo) et son empreinte SHA-256 vérifiée. BranchBrace se fermera ensuite pour laisser l’installateur remplacer la version ${app.getVersion()}.
 
 Vos onglets seront rouverts au prochain lancement.`)) return null;
     updateInProgress = true;
     try {
-      const file = await updates.downloadInstaller(latest.installer, path.join(app.getPath('temp'), 'git-workbench-update'), {
+      const file = await updates.downloadInstaller(latest.installer, path.join(app.getPath('temp'), 'branchbrace-update'), {
         fetch: net.fetch,
         onProgress: (progress) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:progress', progress); },
       });
       await new Promise((resolve, reject) => {
         const child = spawn(file, [], { detached: true, stdio: 'ignore' });
-        child.once('error', () => reject(new GitWorkbenchError('update-launch-failed')));
+        child.once('error', () => reject(new BranchBraceError('update-launch-failed')));
         child.once('spawn', () => { child.unref(); resolve(); });
       });
     } finally { updateInProgress = false; }

@@ -13,7 +13,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-remotes-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-remotes-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');
@@ -156,7 +156,7 @@ test('the force push lease is refused when the upstream moved since the last fet
 
   await assert.rejects(service.forcePush('origin/main', preview.lease), (error) => error.code === 'force-push-stale' && !error.recoveryRef);
   assert.equal(remoteHead(bare), advanced);
-  assert.equal(git(repo, 'for-each-ref', 'refs/git-workbench/recovery/force-push-*'), '');
+  assert.equal(git(repo, 'for-each-ref', 'refs/branchbrace/recovery/force-push-*'), '');
 
   // Après un fetch, le nouvel aperçu montre le commit distant que le push forcé ferait disparaître.
   await service.fetch();

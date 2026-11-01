@@ -1,5 +1,5 @@
 {
-  "name": "git-workbench",
+  "name": "branchbrace",
   "description": "Desktop client Git local, privé et sans télémétrie.",
   "author": "MonniHermes",
   "homepage": "https://github.com/MonniHermes/git-workbench",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.monnishermes.gitworkbench",
-    "productName": "Git Workbench",
+    "productName": "BranchBrace",
     "directories": {
       "output": "artifacts"
     },

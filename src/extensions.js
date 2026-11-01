@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { inflateRawSync } from 'node:zlib';
-import { GitWorkbenchError } from './git.js';
+import { BranchBraceError } from './git.js';
 import { buildCatalog, compareExtensionVersions, languageConfiguration, parseJsonc, readManifest, relativePath } from './grammar-catalog.js';
 
 // Extensions VS Code lues sur le disque pour leurs grammaires TextMate : celles du VS Code installé (et de VSCodium),
@@ -104,8 +104,8 @@ export async function scanExtensions(roots) {
 // Contenu d'une grammaire connue du catalogue ; le nom de fichier indique à vscode-textmate son format (JSON ou plist).
 export async function readGrammar(scan, scopeName) {
   const file = scan.files.get(scopeName);
-  if (!file) throw new GitWorkbenchError('grammar-not-found');
-  if ((await stat(file)).size > MAX_GRAMMAR_SIZE) throw new GitWorkbenchError('grammar-not-found');
+  if (!file) throw new BranchBraceError('grammar-not-found');
+  if ((await stat(file)).size > MAX_GRAMMAR_SIZE) throw new BranchBraceError('grammar-not-found');
   return { path: path.basename(file), content: await readFile(file, 'utf8') };
 }
 
@@ -115,11 +115,11 @@ export function readZip(buffer) {
   for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset -= 1) {
     if (buffer.readUInt32LE(offset) === 0x06054b50) { end = offset; break; }
   }
-  if (end < 0) throw new GitWorkbenchError('extension-invalid');
+  if (end < 0) throw new BranchBraceError('extension-invalid');
   const entries = new Map();
   let offset = buffer.readUInt32LE(end + 16);
   for (let index = buffer.readUInt16LE(end + 10); index > 0; index -= 1) {
-    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new GitWorkbenchError('extension-invalid');
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new BranchBraceError('extension-invalid');
     const nameLength = buffer.readUInt16LE(offset + 28);
     const name = buffer.toString('utf8', offset + 46, offset + 46 + nameLength);
     const entry = { method: buffer.readUInt16LE(offset + 10), compressed: buffer.readUInt32LE(offset + 20), size: buffer.readUInt32LE(offset + 24), local: buffer.readUInt32LE(offset + 42) };
@@ -131,12 +131,12 @@ export function readZip(buffer) {
     has: (name) => entries.has(name),
     read(name) {
       const entry = entries.get(name);
-      if (!entry || entry.size > MAX_GRAMMAR_SIZE || buffer.readUInt32LE(entry.local) !== 0x04034b50) throw new GitWorkbenchError('extension-invalid');
+      if (!entry || entry.size > MAX_GRAMMAR_SIZE || buffer.readUInt32LE(entry.local) !== 0x04034b50) throw new BranchBraceError('extension-invalid');
       const start = entry.local + 30 + buffer.readUInt16LE(entry.local + 26) + buffer.readUInt16LE(entry.local + 28);
       const data = buffer.subarray(start, start + entry.compressed);
       if (entry.method === 0) return Buffer.from(data);
       if (entry.method === 8) return inflateRawSync(data, { maxOutputLength: MAX_GRAMMAR_SIZE });
-      throw new GitWorkbenchError('extension-invalid');
+      throw new BranchBraceError('extension-invalid');
     },
   };
 }
@@ -147,16 +147,16 @@ const safeName = (text) => String(text).replace(/[^a-z0-9._-]/gi, '_');
 // langage sont extraits. Une version déjà importée de la même extension est remplacée.
 export async function importVsix(file, root) {
   const buffer = await readFile(file);
-  if (buffer.length > MAX_VSIX_SIZE) throw new GitWorkbenchError('extension-invalid');
+  if (buffer.length > MAX_VSIX_SIZE) throw new BranchBraceError('extension-invalid');
   let zip;
   let extension;
   try {
     zip = readZip(buffer);
     extension = readManifest(JSON.parse(zip.read('extension/package.json').toString('utf8')), 'imported');
-  } catch { throw new GitWorkbenchError('extension-invalid'); }
-  if (!extension) throw new GitWorkbenchError('extension-no-grammar');
+  } catch { throw new BranchBraceError('extension-invalid'); }
+  if (!extension) throw new BranchBraceError('extension-no-grammar');
   const wanted = new Set(['package.json', ...extension.grammars.map((grammar) => grammar.path), ...extension.languages.map((language) => language.configuration).filter(Boolean)]);
-  if (!extension.grammars.some((grammar) => zip.has(`extension/${grammar.path}`))) throw new GitWorkbenchError('extension-no-grammar');
+  if (!extension.grammars.some((grammar) => zip.has(`extension/${grammar.path}`))) throw new BranchBraceError('extension-no-grammar');
   await mkdir(root, { recursive: true });
   const staging = path.join(root, `.import-${randomUUID()}`);
   // Les versions déjà importées sont mises de côté (dossiers en `.`, ignorés des lectures), pas supprimées : si la
@@ -179,7 +179,7 @@ export async function importVsix(file, root) {
   } catch (error) {
     for (const { folder, parked } of aside.reverse()) await rename(parked, folder).catch(() => {});
     await rm(staging, { recursive: true, force: true });
-    throw error instanceof GitWorkbenchError ? error : new GitWorkbenchError('extension-invalid');
+    throw error instanceof BranchBraceError ? error : new BranchBraceError('extension-invalid');
   }
   for (const { parked } of aside) await rm(parked, { recursive: true, force: true }).catch(() => {});
   return { id: extension.id, name: extension.name, version: extension.version };
@@ -203,6 +203,6 @@ async function importedFolders(root, id) {
 // Retire une extension importée (toutes ses versions) ; les extensions de VS Code ne sont jamais touchées.
 export async function removeImported(root, id) {
   const folders = await importedFolders(root, id);
-  if (!folders.length) throw new GitWorkbenchError('extension-not-found');
+  if (!folders.length) throw new BranchBraceError('extension-not-found');
   for (const folder of folders) await rm(folder, { recursive: true, force: true });
 }

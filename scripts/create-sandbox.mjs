@@ -1,13 +1,13 @@
-// Crée un dépôt Git d'expérimentation pour Git Workbench : plusieurs auteurs, merges, tags, branches distantes,
+// Crée un dépôt Git d'expérimentation pour BranchBrace : plusieurs auteurs, merges, tags, branches distantes,
 // une branche à rebaser, une branche en conflit et des changements non commités.
-// Usage : node scripts/create-sandbox.mjs [dossier]   (défaut : ~/git-workbench-sandbox)
+// Usage : node scripts/create-sandbox.mjs [dossier]   (défaut : ~/branchbrace-sandbox)
 // Refuse d'écrire dans un dossier existant non vide : on ne touche jamais à un dépôt réel.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const target = path.resolve(process.argv[2] || path.join(os.homedir(), 'git-workbench-sandbox'));
+const target = path.resolve(process.argv[2] || path.join(os.homedir(), 'branchbrace-sandbox'));
 if (existsSync(target) && readdirSync(target).length) {
   console.error(`Le dossier ${target} existe et n'est pas vide : supprimez-le ou choisissez un autre chemin.`);
   process.exit(1);
@@ -57,7 +57,7 @@ git(repo, ['config', 'user.email', 'sandbox@example.invalid']);
 git(repo, ['config', 'core.autocrlf', 'false']);
 git(repo, ['remote', 'add', 'origin', remote]);
 
-commit('alice', 'chore: initialiser le projet', { 'README.md': '# Demo App\n\nApplication de démonstration pour Git Workbench.\n', '.gitignore': 'node_modules/\ndist/\n' });
+commit('alice', 'chore: initialiser le projet', { 'README.md': '# Demo App\n\nApplication de démonstration pour BranchBrace.\n', '.gitignore': 'node_modules/\ndist/\n' });
 commit('alice', 'feat: ajouter le point d’entrée', { 'src/app.js': "export function start() {\n  console.log('Demo App');\n}\n" });
 commit('bruno', 'docs: décrire l’installation', { 'docs/install.md': '# Installation\n\n1. Cloner le dépôt\n2. Lancer `npm start`\n' });
 git(repo, ['tag', '-a', 'v0.1.0', '-m', 'Première version']);
@@ -103,9 +103,9 @@ checkout('main');
 
 // Branche qui modifie la même ligne que main : rebase ou cherry-pick en conflit garanti.
 checkout('-c', 'conflict/readme');
-commit('bruno', 'docs: nouveau titre du README', { 'README.md': '# Demo App — édition Bruno\n\nApplication de démonstration pour Git Workbench.\n' });
+commit('bruno', 'docs: nouveau titre du README', { 'README.md': '# Demo App — édition Bruno\n\nApplication de démonstration pour BranchBrace.\n' });
 checkout('main');
-commit('chloe', 'docs: titre du README en anglais', { 'README.md': '# Demo App — English title\n\nApplication de démonstration pour Git Workbench.\n' });
+commit('chloe', 'docs: titre du README en anglais', { 'README.md': '# Demo App — English title\n\nApplication de démonstration pour BranchBrace.\n' });
 
 // main a un commit d'avance sur origin/main (↑1, de quoi tester le push vers le dépôt nu local).
 // Puis des changements non commités : un fichier indexé, un modifié et un non suivi (ligne WIP).

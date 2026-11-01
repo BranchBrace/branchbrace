@@ -20,7 +20,7 @@ async function commitFile(repo, file, content, message) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-merge-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-merge-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');
@@ -47,7 +47,7 @@ async function withRemote(t) {
   return { ...context, bare, other };
 }
 
-const recoveryRefs = (repo) => git(repo, 'for-each-ref', '--format=%(refname)', 'refs/git-workbench/recovery').split('\n').filter(Boolean);
+const recoveryRefs = (repo) => git(repo, 'for-each-ref', '--format=%(refname)', 'refs/branchbrace/recovery').split('\n').filter(Boolean);
 
 test('merge preview lists incoming commits and a diverged merge creates a merge commit after a recovery point', async (t) => {
   const { repo, service } = await fixture(t);
@@ -65,7 +65,7 @@ test('merge preview lists incoming commits and a diverged merge creates a merge 
   assert.equal(preview.fastForward, false);
 
   const result = await service.merge('feature', { expectedTarget: featureTip });
-  assert.match(result.recoveryRef, /^refs\/git-workbench\/recovery\/merge-/);
+  assert.match(result.recoveryRef, /^refs\/branchbrace\/recovery\/merge-/);
   assert.equal(git(repo, 'rev-parse', result.recoveryRef), before);
   assert.equal(result.fastForwarded, false);
   assert.equal(git(repo, 'rev-parse', 'HEAD^1'), before);
@@ -120,7 +120,7 @@ test('a merge conflict keeps the recovery point and hands over to conflict resol
   await assert.rejects(service.merge('feature'), (error) => {
     assert.equal(error.code, 'conflict');
     assert.equal(error.operation, 'merge');
-    assert.match(error.recoveryRef, /^refs\/git-workbench\/recovery\/merge-/);
+    assert.match(error.recoveryRef, /^refs\/branchbrace\/recovery\/merge-/);
     recoveryRef = error.recoveryRef;
     return true;
   });

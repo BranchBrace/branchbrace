@@ -14,7 +14,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-workbench-recovery-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'branchbrace-recovery-'));
   const repo = path.join(root, 'repository');
   await mkdir(repo);
   git(repo, 'init', '--quiet', '-b', 'main');
@@ -36,7 +36,7 @@ test('a recovery point without the working tree records HEAD and its branch only
   const { repo, service } = await fixture(t);
   await writeFile(path.join(repo, 'base.txt'), 'local edit\n');
   const point = await service.saveRecoveryPoint('reset');
-  assert.match(point.ref, /^refs\/git-workbench\/recovery\/reset-/);
+  assert.match(point.ref, /^refs\/branchbrace\/recovery\/reset-/);
   assert.equal(git(repo, 'rev-parse', point.ref), git(repo, 'rev-parse', 'HEAD'));
   assert.equal(point.branch, 'refs/heads/main');
   assert.deepEqual(point.refs, { 'refs/heads/main': point.head });

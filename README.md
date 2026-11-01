@@ -1,6 +1,8 @@
-# Git Workbench
+# BranchBrace
 
-Application desktop locale de gestion Git pour développeurs, sans service hébergé ni télémétrie. Le code source est public sur GitHub mais reste propriétaire (`UNLICENSED`, tous droits réservés) ; voir `LICENSE`. Git Workbench n’est pas affilié à GitKraken et n’en reprend aucun code, marque, texte ou actif.
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-soutenir-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/monnierant)
+
+Application desktop locale de gestion Git pour développeurs, sans service hébergé ni télémétrie. Le code source est public sur GitHub mais reste propriétaire (`UNLICENSED`, tous droits réservés) ; voir `LICENSE`. BranchBrace n’est pas affilié à GitKraken et n’en reprend aucun code, marque, texte ou actif.
 
 Le parcours MVP permet l’inspection locale de l’état, des 100 derniers commits et des diffs, le staging/unstaging par fichier entier, par bloc ou par ligne depuis la vue de diff (index relu et restauré s’il ne correspond pas exactement au choix), le commit explicite non vide et le push explicitement confirmé vers l’upstream affiché, vérifié après écriture distante. Il inclut la création et le changement sûrs de branches locales, le cherry-pick, le rebase et le rebase interactif (pick/drop/fixup). Git CLI doit être installé ; les hooks et credential helpers configurés par l’utilisateur sont respectés.
 

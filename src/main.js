@@ -21,6 +21,9 @@ let viewsLoading = null;
 const views = () => (viewsLoading ??= Promise.all([import('./diff-panel.js'), import('./editor-view.js'), import('./conflict-view.js'), import('./commit-review.js')])
   .then(([diff, editor, conflict, review]) => (monacoViews = { ...diff, ...editor, ...conflict, ...review })));
 const OPERATION_NAMES = { rebase: 'Rebase', 'cherry-pick': 'Cherry-pick', merge: 'Merge', revert: 'Revert' };
+// Opération enregistrée dans un point de reprise, telle qu'Undo l'annonce.
+const RECOVERY_NAMES = { amend: 'amend', 'cherry-pick': 'cherry-pick', rebase: 'rebase', 'interactive-rebase': 'rebase interactif', merge: 'merge', pull: 'pull', redo: 'Redo' };
+const operationLabel = (operation) => RECOVERY_NAMES[operation] || operation;
 
 const ui = {
   opened: false,
@@ -86,6 +89,7 @@ const ui = {
     this.details = null;
     this.setAmend(false);
     this.update(data.status, data.graph, data.refs);
+    this.refreshUndo();
     if (this.view === 'editor') this.showEditor();
     else this.showGraph();
     this.renderTabs();
@@ -135,7 +139,7 @@ const ui = {
     this.details = null;
     $('#repo-name').textContent = 'Aucun dépôt';
     $('#branch-name').textContent = '—';
-    for (const id of ['#new-branch', '#refresh', '#push-button', '#pull-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor']) $(id).disabled = true;
+    for (const id of ['#new-branch', '#refresh', '#push-button', '#pull-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor', '#undo-button', '#redo-button']) $(id).disabled = true;
     $('#sync-state').hidden = true;
     this.setView(null);
     $('#operation-banner').hidden = true;
@@ -147,7 +151,32 @@ const ui = {
   async reload() {
     const result = await this.invoke(() => window.workbench.refresh(ui.root));
     if (result) this.update(result.status, result.graph, result.refs);
+    this.refreshUndo();
     return result;
+  },
+  // Undo/Redo (A17) : boutons actifs seulement s'il y a un point de reprise à restaurer ; l'infobulle dit lequel.
+  async refreshUndo() {
+    const root = this.root;
+    const state = root ? await window.workbench.undoState(root).catch(() => null) : null;
+    if (root !== this.root) return;
+    $('#undo-button').disabled = !state?.undo;
+    $('#undo-button').title = state?.undo ? `Annuler : ${operationLabel(state.undo.operation)} (Ctrl+Z)` : 'Rien à annuler';
+    $('#redo-button').disabled = !state?.redo;
+    $('#redo-button').title = state?.redo ? 'Rétablir l’état d’avant le dernier Undo (Ctrl+Maj+Z)' : 'Rien à rétablir';
+  },
+  async undo() {
+    if (!this.opened || $('#undo-button').disabled) return;
+    const result = await this.act(() => window.workbench.undo(ui.root));
+    if (!result) return;
+    await this.reload();
+    this.message(`Undo : ${operationLabel(result.restored.operation)} annulé, retour à ${result.restored.head.slice(0, 7)}.`);
+  },
+  async redo() {
+    if (!this.opened || $('#redo-button').disabled) return;
+    const result = await this.act(() => window.workbench.redo(ui.root));
+    if (!result) return;
+    await this.reload();
+    this.message(`Redo : état d’avant l’Undo rétabli (${result.restored.head.slice(0, 7)}).`);
   },
   update(status, graph, refs) {
     this.generation += 1;
@@ -1017,6 +1046,19 @@ document.addEventListener('keydown', (event) => {
   }
 });
 $('#push-button').addEventListener('click', () => ui.push());
+$('#undo-button').addEventListener('click', () => ui.undo());
+$('#redo-button').addEventListener('click', () => ui.redo());
+// Ctrl+Z / Ctrl+Maj+Z (ou Ctrl+Y) hors d'un champ de saisie ou de l'éditeur, qui gardent leur propre annulation.
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || document.querySelector('dialog[open]')) return;
+  const target = event.target;
+  if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, .monaco-editor'))) return;
+  const key = event.key.toLowerCase();
+  const action = key === 'z' && !event.shiftKey ? () => ui.undo() : (key === 'z' && event.shiftKey) || key === 'y' ? () => ui.redo() : null;
+  if (!action) return;
+  event.preventDefault();
+  action();
+});
 $('#new-branch').addEventListener('click', () => ui.createBranch());
 $('#back-to-graph').addEventListener('click', () => ui.showGraph());
 $('#ref-filter').addEventListener('input', () => ui.renderRefs());

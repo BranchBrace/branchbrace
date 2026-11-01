@@ -30,11 +30,27 @@ const DANGEROUS_GIT_ENV_VARS = [
   'GIT_CEILING_DIRECTORIES',
 ];
 
+// Seul l'environnement hérité est filtré : une variable passée explicitement par ce module (index temporaire d'un
+// point de reprise) est voulue. `unset` retire en plus des variables, qu'elles soient héritées ou explicites.
 function sanitizedEnv(extra = {}, unset = []) {
-  const env = { ...process.env, ...extra };
-  for (const name of [...DANGEROUS_GIT_ENV_VARS, ...unset]) delete env[name];
+  const env = { ...process.env };
+  for (const name of DANGEROUS_GIT_ENV_VARS) delete env[name];
+  Object.assign(env, extra);
+  for (const name of unset) delete env[name];
   return env;
 }
+
+// Identité des commits internes d'un point de reprise : jamais affichés ni poussés, ils ne doivent pas échouer dans
+// un dépôt sans user.name ni user.email.
+const RECOVERY_IDENTITY = {
+  GIT_AUTHOR_NAME: 'Git Workbench',
+  GIT_AUTHOR_EMAIL: 'git-workbench@localhost',
+  GIT_COMMITTER_NAME: 'Git Workbench',
+  GIT_COMMITTER_EMAIL: 'git-workbench@localhost',
+};
+const RECOVERY_STATE = 'refs/git-workbench/recovery-state';
+// Horodatage strictement croissant : il ordonne les points de reprise, même créés dans la même milliseconde.
+let lastRecoveryTime = 0;
 
 // Sous Windows, le `git` du PATH est en général Git\cmd\git.exe, un lanceur qui démarre un second processus : on
 // appelle directement le binaire indiqué par `git --exec-path`, ce qui divise environ par deux le coût de chaque
@@ -1452,10 +1468,216 @@ export class GitService {
   }
 
   async #saveRecoveryRef(operation) {
-    const head = (await runGit(this.repositoryPath, ['rev-parse', 'HEAD'])).trim();
-    const ref = `refs/git-workbench/recovery/${operation}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    return (await this.#savePoint(operation, 'operation')).ref;
+  }
+
+  // Point de reprise (ADR 0006), enregistré avant une opération destructive ou une réécriture d'historique.
+  // `worktree` y ajoute les modifications non commitées (index, fichiers suivis et non suivis, au format stash, sans
+  // toucher à la pile de stash) ; `refs` liste les autres branches (refs/heads/…) ou tags (refs/tags/…) que
+  // l'opération va déplacer ou supprimer. La branche de HEAD est toujours enregistrée.
+  async saveRecoveryPoint(operation, { worktree = false, refs = [] } = {}) {
+    await this.#ensureRepositoryPath();
+    return this.#summary(await this.#savePoint(operation, 'operation', { worktree, refs }));
+  }
+
+  // Points de reprise de cette worktree, du plus récent au plus ancien.
+  async recoveryPoints() {
+    await this.#ensureRepositoryPath();
+    return (await this.#points()).map((point) => this.#summary(point));
+  }
+
+  // Ce que feraient Undo et Redo, pour les proposer (ou non) dans l'interface.
+  async undoState() {
+    await this.#ensureRepositoryPath();
+    const points = await this.#points();
+    const undo = this.#undoTarget(points);
+    const redo = this.#redoTarget(points);
+    return { undo: undo && this.#summary(undo), redo: redo && this.#summary(redo) };
+  }
+
+  // Undo : restaure le dernier point de reprise. L'état courant devient lui-même un point, celui du Redo.
+  async undo() {
+    await this.#ensureRepositoryPath();
+    const point = this.#undoTarget(await this.#points());
+    if (!point) throw new GitWorkbenchError('nothing-to-undo');
+    return this.#restore(point, 'undo');
+  }
+
+  // Redo : restaure l'état enregistré par le dernier Undo, tant qu'aucune nouvelle opération ne l'a remplacé.
+  async redo() {
+    await this.#ensureRepositoryPath();
+    const point = this.#redoTarget(await this.#points());
+    if (!point) throw new GitWorkbenchError('nothing-to-redo');
+    return this.#restore(point, 'redo');
+  }
+
+  // Restaure un point de reprise désigné par son identifiant ; comme un Undo, il peut être refait par Redo.
+  async restoreRecoveryPoint(id) {
+    await this.#ensureRepositoryPath();
+    const point = (await this.#points()).find((item) => item.id === id);
+    if (!point) throw new GitWorkbenchError('recovery-point-not-found');
+    return this.#restore(point, 'undo');
+  }
+
+  // `refs/git-workbench/recovery/<id>` garde le commit de HEAD (nom historique, cité dans les messages) ;
+  // `recovery-state/<id>` pointe un commit interne : message = description JSON du point, arbre = index enregistré,
+  // parents = commits à garder en vie (HEAD, refs enregistrées, modifications non commitées).
+  async #savePoint(operation, kind, { worktree = false, refs = [] } = {}) {
+    if (typeof operation !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(operation)) throw new GitWorkbenchError('invalid-operation');
+    if (!Array.isArray(refs)) throw new GitWorkbenchError('invalid-recovery-ref');
+    const head = (await runGit(this.repositoryPath, ['rev-parse', '--verify', 'HEAD'])).trim();
+    const branch = await this.#symbolicHead();
+    const recorded = branch ? { [branch]: head } : {};
+    for (const name of refs) {
+      if (typeof name !== 'string' || !/^refs\/(heads|tags)\/./.test(name)) throw new GitWorkbenchError('invalid-recovery-ref');
+      await runGit(this.repositoryPath, ['check-ref-format', name]).catch(() => { throw new GitWorkbenchError('invalid-recovery-ref'); });
+      recorded[name] = await this.#refValue(name);
+    }
+    // Index non enregistrable (entrées en conflit) : la restauration se contentera alors de déplacer HEAD.
+    const index = (await runGit(this.repositoryPath, ['write-tree']).catch(() => '')).trim() || null;
+    const snapshot = worktree ? await this.#snapshotWorktree(head) : null;
+    const createdAt = lastRecoveryTime = Math.max(Date.now(), lastRecoveryTime + 1);
+    const id = `${operation}-${createdAt}-${randomUUID().slice(0, 8)}`;
+    const state = { version: 1, operation, kind, createdAt, gitDir: await this.#gitDirectory(), head, branch, index, refs: recorded, snapshot, consumed: false };
+    const parents = [head, snapshot];
+    let kept = 0;
+    for (const value of new Set(Object.values(recorded).filter((item) => item && item !== head))) {
+      // Un tag annoté n'est pas un commit : une ref dédiée le garde en vie.
+      if ((await runGit(this.repositoryPath, ['cat-file', '-t', value])).trim() === 'commit') parents.push(value);
+      else await runGit(this.repositoryPath, ['update-ref', `refs/git-workbench/recovery-objects/${id}-${kept++}`, value]);
+    }
+    const tree = index || `${head}^{tree}`;
+    const meta = await this.#commitTree(tree, parents, JSON.stringify(state));
+    const ref = `refs/git-workbench/recovery/${id}`;
     await runGit(this.repositoryPath, ['update-ref', ref, head]);
-    return ref;
+    await runGit(this.repositoryPath, ['update-ref', `${RECOVERY_STATE}/${id}`, meta]);
+    return { ...state, id, ref, stateRef: `${RECOVERY_STATE}/${id}`, tree, parents: [...new Set(parents.filter(Boolean))], state };
+  }
+
+  // Modifications non commitées au format d'une entrée de stash (parents : HEAD, index, fichiers non suivis), créée
+  // par `git stash create` et un index temporaire : la pile de stash, partagée entre worktrees, n'est pas touchée.
+  async #snapshotWorktree(head) {
+    const created = (await runGit(this.repositoryPath, ['stash', 'create', 'git-workbench: point de reprise'], { env: RECOVERY_IDENTITY })).trim();
+    // Une entrée finissant par « / » est un dépôt imbriqué : ni enregistré ni supprimé (`git clean` le laisse aussi).
+    const untracked = (await runGit(this.repositoryPath, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter((item) => item && !item.endsWith('/'));
+    if (!untracked.length) return created || null;
+    const token = randomUUID();
+    const indexFile = path.join(await this.#gitDirectory(), `git-workbench-${token}.index`);
+    const listFile = path.join(await this.#gitDirectory(), `git-workbench-${token}.paths`);
+    try {
+      await writeFile(listFile, untracked.join('\0'));
+      const env = { GIT_INDEX_FILE: indexFile };
+      await runGit(this.repositoryPath, ['--literal-pathspecs', 'add', `--pathspec-from-file=${listFile}`, '--pathspec-file-nul'], { env });
+      const untrackedTree = (await runGit(this.repositoryPath, ['write-tree'], { env })).trim();
+      const untrackedCommit = await this.#commitTree(untrackedTree, [], 'untracked files');
+      const indexCommit = created ? `${created}^2` : await this.#commitTree(`${head}^{tree}`, [head], 'index');
+      return this.#commitTree(created ? `${created}^{tree}` : `${head}^{tree}`, [head, indexCommit, untrackedCommit], 'git-workbench: point de reprise');
+    } finally {
+      await rm(indexFile, { force: true });
+      await rm(listFile, { force: true });
+    }
+  }
+
+  async #commitTree(tree, parents, message) {
+    const args = ['commit-tree', tree];
+    for (const parent of new Set(parents.filter(Boolean))) args.push('-p', parent);
+    args.push('-m', message);
+    return (await runGit(this.repositoryPath, args, { env: RECOVERY_IDENTITY })).trim();
+  }
+
+  async #points() {
+    const raw = await runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname)%00%(tree)%00%(parent)%00%(contents:subject)', RECOVERY_STATE]);
+    const gitDir = await this.#gitDirectory();
+    const points = [];
+    for (const line of raw.split('\n').filter(Boolean)) {
+      const [stateRef, tree, parents, subject] = line.split('\0');
+      let state;
+      try { state = JSON.parse(subject); } catch { continue; }
+      if (state?.version !== 1 || state.gitDir !== gitDir) continue;
+      const id = stateRef.slice(RECOVERY_STATE.length + 1);
+      points.push({ ...state, id, ref: `refs/git-workbench/recovery/${id}`, stateRef, tree, parents: parents.split(' ').filter(Boolean), state });
+    }
+    return points.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  // Undo vise le dernier point non restauré, sauf ceux qu'un Undo a créés (ceux-là sont pour Redo).
+  #undoTarget(points) {
+    return points.find((point) => !point.consumed && point.kind !== 'undo') || null;
+  }
+
+  // Redo vise le dernier état enregistré par un Undo, tant qu'aucune opération n'a eu lieu depuis.
+  #redoTarget(points) {
+    const lastOperation = Math.max(0, ...points.filter((point) => point.kind === 'operation').map((point) => point.createdAt));
+    return points.find((point) => !point.consumed && point.kind === 'undo' && point.createdAt > lastOperation) || null;
+  }
+
+  #summary(point) {
+    const { id, ref, operation, kind, createdAt, head, branch, refs, snapshot, consumed } = point;
+    return { id, ref, operation, kind, createdAt, head, branch, refs, worktree: Boolean(snapshot), consumed };
+  }
+
+  async #restore(point, counterKind) {
+    if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
+    const branch = await this.#symbolicHead();
+    if (branch !== point.branch) throw new GitWorkbenchError('recovery-point-other-branch');
+    const head = (await runGit(this.repositoryPath, ['rev-parse', '--verify', 'HEAD'])).trim();
+    const others = Object.entries(point.refs).filter(([name]) => name !== point.branch);
+    if (branch) await this.#assertNotPublished(branch, head, point.head);
+    for (const [name, target] of others) await this.#assertNotPublished(name, await this.#refValue(name), target);
+    // Sans modifications enregistrées, les modifications locales sont gardées : Git refuse d'avance (essai à blanc)
+    // si l'une d'elles devait être écrasée.
+    const currentIndex = point.snapshot || !point.index ? null : (await runGit(this.repositoryPath, ['write-tree'])).trim();
+    if (currentIndex) {
+      // Comme `git status` : un fichier réécrit à l'identique ne doit pas compter comme modifié.
+      await runGit(this.repositoryPath, ['update-index', '-q', '--refresh'], { acceptExitCodes: [1] });
+      await runGit(this.repositoryPath, ['read-tree', '-n', '-m', '-u', currentIndex, point.index]).catch(() => { throw new GitWorkbenchError('unsafe-working-tree'); });
+    }
+    // L'état courant, modifications non commitées comprises, devient un point de reprise avant d'être remplacé.
+    const counter = await this.#savePoint(counterKind, counterKind, { worktree: true, refs: others.map(([name]) => name) });
+    if (point.snapshot) {
+      await runGit(this.repositoryPath, ['reset', '--hard', '--quiet', point.head]);
+      // Pas de `git clean` : seuls les fichiers non suivis que le point va réécrire sont retirés (l'état remplacé les
+      // a déjà enregistrés), les autres restent en place.
+      const untracked = await this.#refValue(`${point.snapshot}^3`);
+      if (untracked) {
+        const paths = (await runGit(this.repositoryPath, ['ls-tree', '-r', '-z', '--name-only', untracked])).split('\0').filter(Boolean);
+        for (const filePath of paths) await rm(path.join(this.repositoryPath, filePath), { force: true });
+      }
+      await runGit(this.repositoryPath, ['stash', 'apply', '--index', '--quiet', point.snapshot]);
+    } else if (currentIndex) {
+      await runGit(this.repositoryPath, ['read-tree', '-m', '-u', currentIndex, point.index]);
+      await runGit(this.repositoryPath, ['reset', '--soft', '--quiet', point.head]);
+    } else {
+      await runGit(this.repositoryPath, ['reset', '--keep', '--quiet', point.head]);
+    }
+    for (const [name, target] of others) {
+      if (target) await runGit(this.repositoryPath, ['update-ref', name, target]);
+      else await runGit(this.repositoryPath, ['update-ref', '-d', name]);
+    }
+    const meta = await this.#commitTree(point.tree, point.parents, JSON.stringify({ ...point.state, consumed: true }));
+    await runGit(this.repositoryPath, ['update-ref', point.stateRef, meta]);
+    return { restored: this.#summary(point), recoveryPoint: this.#summary(counter), status: await this.status() };
+  }
+
+  // Undo et Redo restent locaux : déplacer une branche ne doit pas retirer un commit déjà présent sur son upstream.
+  async #assertNotPublished(name, from, to) {
+    if (!from || !to || !name.startsWith('refs/heads/')) return;
+    const upstream = (await runGit(this.repositoryPath, ['for-each-ref', '--format=%(upstream)', name])).trim();
+    const published = upstream && await this.#refValue(upstream);
+    if (!published) return;
+    const bases = (await runGit(this.repositoryPath, ['merge-base', '--all', from, published], { acceptExitCodes: [1] })).split(/\s+/).filter(Boolean);
+    for (const base of bases) {
+      const kept = await runGit(this.repositoryPath, ['merge-base', '--is-ancestor', base, to]).then(() => true, () => false);
+      if (!kept) throw new GitWorkbenchError('recovery-would-rewrite-published');
+    }
+  }
+
+  async #symbolicHead() {
+    return (await runGit(this.repositoryPath, ['symbolic-ref', '--quiet', 'HEAD'], { acceptExitCodes: [1] })).trim() || null;
+  }
+
+  async #refValue(name) {
+    return (await runGit(this.repositoryPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', name], { acceptExitCodes: [1] })).trim() || null;
   }
 
   // Nom complet `prefixe + nom` vérifié par `git check-ref-format` (sans --branch, qui accepterait « @{-1} »).

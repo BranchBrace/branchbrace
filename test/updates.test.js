@@ -142,3 +142,9 @@ test('update settings default to the channel of the installed version and are va
 test('the update module ships inside the packaged app', () => {
   assert.ok(manifest.build.files.includes('src/updates.js'));
 });
+
+test('the update found at startup does not replace the workbench update method', async () => {
+  const renderer = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.match(renderer, /^ {2}update\(status, graph, refs\) \{/m, 'the workbench still refreshes its views through update()');
+  assert.doesNotMatch(renderer, /\bui\.update\s*=[^=]/, 'assigning ui.update would break every repository opened afterwards');
+});

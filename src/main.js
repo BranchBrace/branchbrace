@@ -1,13 +1,15 @@
 import { WIP, renderGraph } from './graph-view.js';
 import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
-import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
+import { alertDialog, askChoice, askRename, askTag, askText, askWorktree, confirmDialog,  element, modal, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { chooseIntegration, confirmMerge } from './merge-dialog.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
-import { describeError } from './errors.js';
+import { describeCode, describeError, errorCode } from './errors.js';
+import { askRemote } from './remote-dialog.js';
 import { checkOnStartup, openUpdates } from './update-dialog.js';
+import { openExtensions } from './extensions-dialog.js';
 
 const SUMMARY_LIMIT = 72;
 const $ = (selector) => document.querySelector(selector);
@@ -28,6 +30,8 @@ const ui = {
   root: null,
   tabs: [],
   drafts: new Map(),
+  // Incrémentée à chaque état appliqué : une réponse lancée avant reste périmée et ne l'écrase pas.
+  generation: 0,
   branch: '',
   upstream: null,
   files: [],
@@ -79,6 +83,7 @@ const ui = {
     $('#open-repo').title = `${data.root}\nCliquer pour ouvrir un autre dépôt dans un nouvel onglet`;
     $('#empty-state').hidden = true;
     for (const id of ['#new-branch', '#refresh', '#fetch-button', '#folder-button', '#view-graph', '#view-editor']) $(id).disabled = false;
+    autoFetch.run(data.root, { reason: 'open' });
     this.selected = null;
     this.selectedCommit = WIP;
     this.details = null;
@@ -135,6 +140,7 @@ const ui = {
     $('#repo-name').textContent = 'Aucun dépôt';
     $('#branch-name').textContent = '—';
     for (const id of ['#new-branch', '#refresh', '#push-button', '#pull-button', '#fetch-button', '#folder-button', '#view-graph', '#view-editor', '#undo-button', '#redo-button']) $(id).disabled = true;
+    $('#sync-state').hidden = true;
     this.setView(null);
     $('#operation-banner').hidden = true;
     $('#empty-state').hidden = false;
@@ -173,6 +179,7 @@ const ui = {
     this.message(`Redo : état d’avant l’Undo rétabli (${result.restored.head.slice(0, 7)}).`);
   },
   update(status, graph, refs) {
+    this.generation += 1;
     this.files = status.files;
     this.branch = status.branch;
     this.upstream = status.upstream;
@@ -184,6 +191,7 @@ const ui = {
     $('#push-button').title = status.upstream ? `Pousser vers ${status.upstream}` : 'Upstream non configuré';
     $('#pull-button').disabled = !status.upstream;
     $('#pull-button').title = status.upstream ? `Récupérer ${status.upstream} puis avancer la branche (fast-forward seul)` : 'Upstream non configuré';
+    this.renderSyncState(status);
     if (this.selectedCommit !== WIP && !this.graph.commits.some((commit) => commit.hash === this.selectedCommit)) { this.selectedCommit = WIP; this.details = null; }
     this.renderGraph();
     this.renderRefs();
@@ -308,8 +316,11 @@ const ui = {
       onActivate: (branch) => this.checkout(branch),
       onCheckoutRemote: (name) => this.checkoutRemote(name),
       onOpenRemote: (remote, branch) => this.invoke(() => window.workbench.openRemote(ui.root, remote, branch)),
+      onRemoteMenu: (remote, x, y) => this.remoteMenu(remote, x, y),
       loadRemoteIcon: (remote) => window.workbench.remoteIcon(ui.root, remote),
       onContextMenu: (kind, ref, x, y) => this.refMenu(kind, ref, x, y),
+      onOpenWorktree: (folder) => this.openWorktree(folder),
+      onWorktreeMenu: (worktree, x, y) => this.worktreeMenu(worktree, x, y),
     });
   },
   findRef(kind, name) { return this.refs[kind]?.find((ref) => ref.name === name); },
@@ -452,12 +463,39 @@ const ui = {
     const status = await this.act(() => window.workbench.checkoutRemote(ui.root, name));
     if (status) { await this.reload(); this.message(`Branche locale « ${status.branch} » créée : elle suit ${name}.`); }
   },
+  // ↑ commits locaux à pousser, ↓ commits distants à récupérer par Pull, d'après le dernier fetch.
+  renderSyncState(status) {
+    const state = $('#sync-state');
+    const { upstream, ahead = 0, behind = 0 } = status;
+    state.hidden = !upstream;
+    state.classList.toggle('diverged', ahead > 0 && behind > 0);
+    const up = document.createElement('span'); up.textContent = `↑${ahead}`;
+    const down = document.createElement('span'); down.textContent = `↓${behind}`;
+    down.classList.toggle('behind', behind > 0);
+    state.replaceChildren(up, ' ', down);
+    state.title = !upstream ? '' : ahead && behind
+      ? `Divergée de ${upstream} : ${ahead} commit(s) local(aux), ${behind} distant(s). Pull n’avancera pas la branche : il proposera un merge ou un rebase explicite.`
+      : `${ahead} commit(s) à pousser, ${behind} à récupérer depuis ${upstream} (état du dernier fetch).`;
+  },
+  // Échec d'un fetch automatique : un point sur le bouton Fetch, le détail dans son info-bulle, pas de fenêtre.
+  setSyncError(error) {
+    const button = $('#fetch-button');
+    button.classList.toggle('sync-error', Boolean(error));
+    button.title = error
+      ? `Dernier fetch automatique échoué : ${describeError(error)} Cliquer pour réessayer.`
+      : 'Récupérer les branches des dépôts distants (git fetch --all --prune)';
+  },
+  // Le dépôt est capturé avant l'attente : si l'onglet a changé entre-temps, le résultat n'est pas affiché dans l'autre.
   async fetch() {
+    const root = this.root;
     $('#fetch-button').disabled = true;
     this.message('Récupération depuis les dépôts distants…');
-    const data = await this.act(() => window.workbench.fetch(ui.root));
+    const data = await this.act(() => window.workbench.fetch(root));
     $('#fetch-button').disabled = !this.opened;
     if (!data) return;
+    autoFetch.done(root);
+    if (root !== this.root) return;
+    this.setSyncError(null);
     this.update(data.status, data.graph, data.refs);
     const behind = data.refs.local.filter((ref) => ref.behind).map((ref) => `${ref.name} ↓${ref.behind}`);
     this.message(`Fetch terminé. ${behind.length ? `En retard sur la distante : ${behind.join(', ')}.` : 'Les branches suivies sont à jour.'}`);
@@ -471,10 +509,17 @@ const ui = {
       null,
       ...remotes.filter((remote) => remote.web).map((remote) => [`Ouvrir ${remote.name} sur ${remote.host}`, () => this.invoke(() => window.workbench.openRemote(ui.root, remote.name))]),
       remotes.some((remote) => remote.web) ? null : undefined,
+      ['Ajouter un dépôt distant…', () => this.editRemote()],
       ['Copier le chemin du dépôt', () => this.copy(this.root, 'Chemin copié')],
     ], x, y);
   },
   async checkout(branch) {
+    // Git n'extrait une branche que dans une seule worktree : on propose d'ouvrir celle-ci plutôt qu'un refus brut.
+    const elsewhere = this.findRef('local', branch)?.worktree;
+    if (elsewhere) {
+      if (await confirmDialog({ title: 'Branche extraite ailleurs', message: `« ${branch} » est déjà extraite dans la worktree ${elsewhere}. Git n’autorise qu’une worktree par branche : basculer ici est impossible.\n\nOuvrir cette worktree dans un onglet ?` })) await this.openWorktree(elsewhere);
+      return;
+    }
     if (await this.act(() => window.workbench.switchBranch(ui.root, branch))) { await this.reload(); this.message(`Branche courante : ${branch}.`); }
   },
   async showCommitDiff(hash, filePath) {
@@ -524,7 +569,9 @@ const ui = {
       return node;
     };
     const actions = [];
-    if (file) actions.push(button(staged ? 'Désindexer' : 'Indexer', staged ? 'Retirer ce fichier de l’index' : 'Ajouter ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
+    if (file) actions.push(button(staged ? 'Désindexer le fichier' : 'Indexer le fichier', staged ? 'Retirer tout ce fichier de l’index' : 'Ajouter tout ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
+    // Blocs et lignes (A3) : pas pour un fichier renommé ni en conflit, que seul le fichier entier peut indexer.
+    const lines = file && !file.originalPath ? { verb: staged ? 'Désindexer' : 'Indexer', apply: (request) => this.applyLines(filePath, staged, request) } : null;
     if (file && file.worktreeStatus !== 'D') {
       actions.push(button('Éditeur', 'Ouvrir le fichier dans l’éditeur intégré', () => this.showEditor(filePath)));
       actions.push(button('Dossier', 'Afficher le fichier dans l’explorateur', () => this.invoke(() => window.workbench.showFile(ui.root, filePath))));
@@ -536,12 +583,21 @@ const ui = {
       this.editor?.reloadClean(filePath);
       this.message(`${filePath} enregistré.`);
       return true;
-    });
+    }, lines);
   },
-  async renderDiff(filePath, data, title, actions, onSave) {
+  async renderDiff(filePath, data, title, actions, onSave, lines = null) {
     const { showDiff } = await views();
     this.setView('diff', title);
-    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave });
+    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave, lines });
+  },
+  // Indexe ou désindexe un bloc ou des lignes, puis recharge le diff (même en cas de refus : il a pu changer sur disque).
+  // Quand il ne reste rien de ce côté, la vue passe à l'autre (non indexé → indexé ou l'inverse).
+  async applyLines(filePath, staged, request) {
+    const status = await this.applyStatus(() => (staged ? window.workbench.unstageLines(ui.root, filePath, request) : window.workbench.stageLines(ui.root, filePath, request)));
+    if (status) this.message(staged ? `Lignes retirées de l’index : ${filePath}.` : `Lignes ajoutées à l’index : ${filePath}.`);
+    const updated = this.files.find((item) => item.path === filePath);
+    if (!updated || this.selected !== filePath || this.view !== 'diff') return;
+    await this.showDiff(filePath, (staged ? updated.staged : updated.unstaged) ? staged : !staged);
   },
   async copy(text, label) {
     try { await navigator.clipboard.writeText(text); this.message(`${label} : ${text}.`); }
@@ -557,9 +613,97 @@ const ui = {
     if (!name) return;
     if (await this.act(() => window.workbench.createBranch(ui.root, name, startPoint))) { await this.reload(); this.message(`Branche « ${name} » créée.`); }
   },
+  async renameBranch(ref) {
+    const choice = await askRename({ name: ref.name, upstream: ref.upstream && !ref.gone ? ref.upstream : null });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.renameBranch(ui.root, ref.name, choice.name, choice.remote));
+    // Rechargée même après un refus : un renommage distant à moitié fait a déjà changé le nom local.
+    await this.reload();
+    if (!result) return;
+    if (result.remote?.oldBranchKept) {
+      const text = describeCode('remote-old-branch-kept');
+      this.message(text);
+      await alertDialog({ title: 'Renommage partiel', message: text });
+      return;
+    }
+    this.message(result.remote ? `Branche « ${ref.name} » renommée « ${result.branch} », aussi sur ${result.remote.name}.` : `Branche « ${ref.name} » renommée « ${result.branch} ».`);
+  },
+  // Une worktree introuvable ne s'ouvre pas (worktree-not-found) : on oriente vers « Oublier les worktrees introuvables ».
+  async openWorktree(folder) {
+    if ((this.refs.worktrees || []).some((item) => item.prunable && item.path === folder)) {
+      this.message(`La worktree ${folder} est introuvable : elle ne peut pas être ouverte.`);
+      await this.pruneWorktrees();
+      return;
+    }
+    const data = await this.act(() => window.workbench.openWorktree(ui.root, folder));
+    if (data) this.open(data, `Worktree ${repositoryName(data.root)} ouverte.`);
+  },
+  // Sans branche : demande une branche libre ou un nouveau nom ; le dossier vient ensuite du dialogue natif.
+  async createWorktree(branch = null) {
+    const free = this.refs.local.filter((ref) => !ref.current && !ref.worktree).map((ref) => ref.name);
+    const choice = branch ? { branch, newBranch: false } : await askWorktree({ branches: free, base: this.branch });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.addWorktree(ui.root, choice.branch, choice.newBranch));
+    if (!result) return;
+    await this.reload();
+    this.message(`Worktree « ${result.branch} » créée dans ${result.path}. Double-clic dessus pour l’ouvrir.`);
+  },
+  async removeWorktree(worktree) {
+    const result = await this.act(() => window.workbench.removeWorktree(ui.root, worktree.path));
+    if (!result) return;
+    // L'onglet de la worktree supprimée disparaît : ses brouillons et ses modèles d'éditeur aussi, comme à la fermeture.
+    for (const root of [worktree.path, ...this.tabs.filter((tab) => !result.tabs.includes(tab))]) {
+      this.drafts.delete(root);
+      this.editor?.forget(root);
+    }
+    this.tabs = result.tabs;
+    this.renderTabs();
+    await this.reload();
+    this.message(`Worktree ${worktree.path} supprimée${worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : ''}.`);
+  },
+  async pruneWorktrees() {
+    if (await this.act(() => window.workbench.pruneWorktrees(ui.root))) { await this.reload(); this.message('Worktrees introuvables oubliées (git worktree prune).'); }
+  },
+  worktreeMenu(worktree, x, y) {
+    const prunable = (this.refs.worktrees || []).some((item) => item.prunable);
+    showMenu([
+      ['Ouvrir dans un onglet', () => this.openWorktree(worktree.path), worktree.current || worktree.prunable],
+      ['Nouvelle worktree…', () => this.createWorktree()],
+      prunable ? ['Oublier les worktrees introuvables (prune)', () => this.pruneWorktrees()] : undefined,
+      null,
+      ['Copier le chemin', () => this.copy(worktree.path, 'Chemin copié')],
+      ['Supprimer la worktree…', () => this.removeWorktree(worktree), worktree.main || worktree.current || Boolean(worktree.locked)],
+    ], x, y);
+  },
   async cherryPick(hash) {
     const result = await this.act(() => window.workbench.cherryPick(ui.root, hash));
     if (result) { await this.reload(); this.message(`Cherry-pick terminé. Récupération conservée : ${result.recoveryRef}.`); }
+  },
+  // Commit inverse ; pour un merge, l'utilisateur choisit le parent gardé. Un conflit ouvre la résolution habituelle.
+  async revert(commit) {
+    let mainline = null;
+    if (commit.parents.length > 1) {
+      const describe = (hash) => this.graph.commits.find((item) => item.hash === hash)?.subject || '';
+      mainline = await askChoice({
+        title: `Revert du merge ${commit.hash.slice(0, 7)}`,
+        message: 'Ce commit est un merge : choisissez le parent dont la version est gardée. Les changements apportés par les autres parents seront annulés.',
+        options: commit.parents.map((hash, index) => ({ value: index + 1, label: `Parent ${index + 1} · ${hash.slice(0, 7)} ${describe(hash)}` })),
+        confirmLabel: 'Revert',
+      });
+      if (!mainline) return;
+    }
+    const result = await this.act(() => window.workbench.revert(ui.root, commit.hash, mainline));
+    await this.reload();
+    if (result) this.message(`Revert créé (${result.hash.slice(0, 7)}). Récupération conservée : ${result.recoveryRef}.`);
+  },
+  async createTag(hash) {
+    const tag = await askTag({ target: hash.slice(0, 7) });
+    if (!tag) return;
+    if (await this.act(() => window.workbench.createTag(ui.root, tag.name, hash, tag))) { await this.reload(); this.message(`Tag ${tag.annotated ? 'annoté' : 'léger'} « ${tag.name} » créé.`); }
+  },
+  async pushTag(name, remote) {
+    const result = await this.act(() => window.workbench.pushTag(ui.root, name, remote));
+    if (result) this.message(`Tag « ${name} » poussé vers ${remote} (${result.hash.slice(0, 12)}).`);
   },
   async rebase(onto) {
     const result = await this.act(() => window.workbench.rebase(ui.root, onto));
@@ -586,16 +730,20 @@ const ui = {
     await this.reload();
     if (result) this.message(`${result.fastForwarded ? 'Fast-forward' : 'Merge'} de « ${label} » terminé. Récupération conservée : ${result.recoveryRef}.`);
   },
+  // Dépôt et branche capturés avant l'attente : après un changement d'onglet, rien n'est affiché ni proposé dans l'autre.
   async pull() {
-    if (!this.upstream) return;
+    const { root, branch, upstream } = this;
+    if (!upstream) return;
     $('#pull-button').disabled = true;
-    this.message(`Pull depuis ${this.upstream}…`);
-    const result = await this.act(() => window.workbench.pull(ui.root, this.upstream));
+    this.message(`Pull depuis ${upstream}…`);
+    const result = await this.act(() => window.workbench.pull(root, upstream));
+    if (root !== this.root) return;
     await this.reload();
-    if (!result) return;
+    if (!result || root !== this.root) return;
     if (result.pulled) { this.message(`Pull terminé : ${result.behind} commit(s) intégré(s) en fast-forward. Récupération conservée : ${result.recoveryRef}.`); return; }
-    if (!result.diverged) { this.message(`« ${this.branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
-    const choice = await chooseIntegration({ branch: this.branch, ...result });
+    if (!result.diverged) { this.message(`« ${branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
+    const choice = await chooseIntegration({ branch, ...result });
+    if (root !== this.root) return;
     if (choice === 'merge') await this.merge(result.upstream);
     else if (choice === 'rebase') await this.rebase(result.upstream);
   },
@@ -603,12 +751,65 @@ const ui = {
     const result = await this.act(() => window.workbench.push(ui.root, this.upstream));
     if (result) { await this.reload(); this.message(`Push vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}).`); }
   },
+  // Lease périmé : l'upstream a bougé depuis le dernier fetch, on propose de le récupérer plutôt que de réessayer.
+  async forcePush() {
+    let result;
+    try { result = await window.workbench.forcePush(ui.root, this.upstream); }
+    catch (error) {
+      const text = describeError(error);
+      this.message(text);
+      if (errorCode(error) !== 'force-push-stale') await alertDialog({ title: 'Opération refusée', message: text });
+      else if (await confirmDialog({ title: 'L’upstream a changé', message: `${text}\n\nRécupérer maintenant les branches distantes ?` })) await this.fetch();
+      return;
+    }
+    if (result) { await this.reload(); this.message(`Push forcé vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}). Anciens commits distants conservés : ${result.recoveryRef}.`); }
+  },
+  // Ajout (sans `remote`) ou changement d'URL : un refus réaffiche le formulaire avec sa raison.
+  async editRemote(remote = null) {
+    let values = { name: remote ? null : '', url: remote?.url ?? '' };
+    let error = '';
+    for (;;) {
+      const answer = await askRemote({ ...values, error, title: remote ? `URL de « ${remote.name} »` : 'Ajouter un dépôt distant', confirmLabel: remote ? 'Enregistrer' : 'Ajouter' });
+      if (!answer) return;
+      values = answer;
+      try {
+        if (remote) await window.workbench.setRemoteUrl(ui.root, remote.name, answer.url);
+        else await window.workbench.addRemote(ui.root, answer.name, answer.url);
+      } catch (failure) { error = describeError(failure); continue; }
+      await this.reload();
+      this.message(remote ? `URL de « ${remote.name} » changée.` : `Dépôt distant « ${answer.name} » ajouté. Récupérez-le (fetch) pour voir ses branches.`);
+      return;
+    }
+  },
+  async renameRemote(name) {
+    const newName = await askText({ title: `Renommer « ${name} »`, label: 'NOUVEAU NOM', value: name, confirmLabel: 'Renommer', hint: 'Les branches distantes et l’upstream des branches locales suivent le nouveau nom.' });
+    if (!newName || newName === name) return;
+    if (await this.act(() => window.workbench.renameRemote(ui.root, name, newName))) { await this.reload(); this.message(`Dépôt distant « ${name} » renommé en « ${newName} ».`); }
+  },
+  async removeRemote(name) {
+    if (await this.act(() => window.workbench.removeRemote(ui.root, name))) { await this.reload(); this.message(`Dépôt distant « ${name} » retiré.`); }
+  },
+  async remoteMenu(name, x, y) {
+    const remote = (await this.invoke(() => window.workbench.remotes(ui.root)))?.find((item) => item.name === name);
+    if (!remote) return;
+    const site = (this.refs.remotes || []).find((item) => item.name === name && item.web);
+    showMenu([
+      [remote.credentials ? `Changer l’URL (elle contient des identifiants)…` : `Changer l’URL de « ${name} »…`, () => this.editRemote(remote)],
+      [`Renommer « ${name} »…`, () => this.renameRemote(name)],
+      [`Retirer « ${name} »…`, () => this.removeRemote(name)],
+      null,
+      site ? [`Ouvrir ${name} sur ${site.host}`, () => this.invoke(() => window.workbench.openRemote(ui.root, name))] : undefined,
+      ['Ajouter un dépôt distant…', () => this.editRemote()],
+    ], x, y);
+  },
   commitMenu(commit, x, y) {
     const short = commit.hash.slice(0, 7);
     this.selectCommit(commit.hash);
     showMenu([
       ['Créer une branche ici…', () => this.createBranch(commit.hash)],
       ['Cherry-pick ce commit', () => this.cherryPick(commit.hash)],
+      [commit.parents.length > 1 ? 'Revert ce merge…' : 'Revert ce commit', () => this.revert(commit)],
+      ['Créer un tag ici…', () => this.createTag(commit.hash)],
       [`Merger ${short} dans « ${this.branch} »…`, () => this.merge(commit.hash, short)],
       [`Rebaser « ${this.branch} » sur ${short}`, () => this.rebase(commit.hash)],
       [`Rebase interactif de « ${this.branch} » depuis ${short}…`, () => this.interactiveRebase(commit.hash, short)],
@@ -620,7 +821,13 @@ const ui = {
   refMenu(kind, ref, x, y) {
     const isCurrent = kind === 'local' && ref.name === this.branch;
     const items = [];
-    if (kind === 'local' && !isCurrent) items.push([`Basculer sur « ${ref.name} »`, () => this.checkout(ref.name)]);
+    const worktree = kind === 'local' ? this.findRef('local', ref.name)?.worktree : null;
+    // Une worktree introuvable (dossier supprimé ou disque débranché) ne s'ouvre pas : on propose de l'oublier.
+    const missing = worktree && (this.refs.worktrees || []).some((item) => item.branch === ref.name && item.prunable);
+    if (missing) items.push([`Oublier les worktrees introuvables (dont ${repositoryName(worktree)})`, () => this.pruneWorktrees()]);
+    else if (worktree) items.push([`Ouvrir sa worktree (${repositoryName(worktree)})`, () => this.openWorktree(worktree)]);
+    else if (kind === 'local' && !isCurrent) items.push([`Basculer sur « ${ref.name} »`, () => this.checkout(ref.name)]);
+    if (kind === 'local' && !isCurrent && !worktree) items.push([`Créer une worktree pour « ${ref.name} »…`, () => this.createWorktree(ref.name)]);
     if (kind === 'remote') {
       const remote = this.findRef('remote', ref.name) || ref;
       if (remote.trackedBy) items.push([`Basculer sur « ${remote.trackedBy} » (qui la suit)`, () => this.checkout(remote.trackedBy), remote.trackedBy === this.branch]);
@@ -628,12 +835,15 @@ const ui = {
     }
     if (isCurrent) items.push([this.upstream ? `Pull depuis ${this.upstream}` : 'Pull (upstream non configuré)', () => this.pull(), !this.upstream]);
     if (isCurrent) items.push([this.upstream ? `Push vers ${this.upstream}` : 'Push (upstream non configuré)', () => this.push(), !this.upstream]);
+    if (isCurrent && this.upstream) items.push([`Push forcé (lease) vers ${this.upstream}…`, () => this.forcePush()]);
     if (!isCurrent) items.push([`Merger « ${ref.name} » dans « ${this.branch} »…`, () => this.merge(ref.name)]);
     if (kind !== 'tags' && !isCurrent) {
       items.push([`Rebaser « ${this.branch} » sur « ${ref.name} »`, () => this.rebase(ref.name)]);
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);
     }
     if (ref.hash) items.push(['Créer une branche ici…', () => this.createBranch(ref.hash)]);
+    if (kind === 'local') items.push(['Renommer…', () => this.renameBranch(this.findRef('local', ref.name) || ref)]);
+    if (kind === 'tags') for (const remote of this.refs.remotes || []) items.push([`Pousser le tag vers ${remote.name}`, () => this.pushTag(ref.name, remote.name)]);
     // Page de la branche sur GitHub/GitLab : distante elle-même, ou upstream d'une branche locale.
     const remoteRef = kind === 'remote' ? this.findRef('remote', ref.name) : kind === 'local' && ref.upstream ? this.findRef('remote', ref.upstream) : null;
     const site = remoteRef && (this.refs.remotes || []).find((item) => item.name === remoteRef.remote && item.web);
@@ -651,8 +861,8 @@ $('#new-tab').addEventListener('click', chooseRepository);
 const windowAction = (action) => ui.invoke(() => window.workbench.windowAction(action));
 // Une version plus récente trouvée (au démarrage ou depuis la fenêtre) est signalée par une pastille sur le menu.
 const setUpdate = (found) => {
-  ui.update = found?.available ? found : null;
-  $('#app-menu').classList.toggle('has-update', Boolean(ui.update));
+  ui.pendingUpdate = found?.available ? found : null;
+  $('#app-menu').classList.toggle('has-update', Boolean(ui.pendingUpdate));
 };
 const appMenu = () => {
   const box = $('#app-menu').getBoundingClientRect();
@@ -668,7 +878,9 @@ const appMenu = () => {
     ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
     ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
     null,
-    [ui.update ? `Mise à jour disponible (${ui.update.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.update), onResult: setUpdate })],
+    ['Extensions VS Code…', () => openExtensions().catch((error) => ui.message(describeError(error), true))],
+    [`Fetch automatique${autoFetch.settings.autoFetch ? ` (${autoFetch.settings.intervalMinutes} min)` : ' (désactivé)'}…`, () => autoFetch.configure()],
+    [ui.pendingUpdate ? `Mise à jour disponible (${ui.pendingUpdate.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.pendingUpdate), onResult: setUpdate })],
     ['Recharger la fenêtre', () => windowAction('reload')],
     import.meta.env.DEV ? ['Outils de développement', () => windowAction('devtools'), false, 'Ctrl+Maj+I'] : undefined,
     null,
@@ -691,6 +903,93 @@ document.addEventListener('keydown', (event) => {
   shortcut();
 });
 
+// Fetch automatique en arrière-plan : toutes les N minutes, à l'ouverture d'un onglet et au retour sur la fenêtre.
+// Silencieux s'il réussit (seuls le graphe, les branches et ↑↓ bougent), un point discret sur Fetch s'il échoue.
+// Ni pull ni merge : la branche courante n'avance que par le bouton Pull.
+const FETCH_INTERVALS = [1, 2, 5, 10, 15, 30, 60];
+const FOCUS_DEBOUNCE = 1500;
+// Hors minuterie, pas de nouveau fetch si le précédent de cet onglet a moins d'une minute.
+const FETCH_MIN_GAP = 60 * 1000;
+const autoFetch = {
+  settings: { autoFetch: true, intervalMinutes: 5 },
+  loading: null,
+  timer: null,
+  focusTimer: null,
+  last: new Map(),
+  errors: new Map(),
+  load() {
+    this.loading ??= ui.invoke(() => window.workbench.syncSettings()).then((settings) => { if (settings) this.settings = settings; this.schedule(); });
+    return this.loading;
+  },
+  schedule() {
+    clearInterval(this.timer);
+    this.timer = this.settings.autoFetch ? setInterval(() => this.run(ui.root, { reason: 'interval' }), this.settings.intervalMinutes * 60 * 1000) : null;
+  },
+  done(root) { this.last.set(root, Date.now()); this.errors.delete(root); },
+  async run(root, { reason }) {
+    if (root === ui.root) ui.setSyncError(this.errors.get(root) ?? null);
+    await this.load();
+    if (!root || !this.settings.autoFetch || (root === ui.root && ui.operation)) return;
+    if (reason !== 'interval' && Date.now() - (this.last.get(root) || 0) < FETCH_MIN_GAP) return;
+    this.last.set(root, Date.now());
+    const generation = ui.generation;
+    let data;
+    try { data = await window.workbench.fetch(root, true); }
+    catch (error) {
+      this.errors.set(root, error);
+      if (root === ui.root) ui.setSyncError(error);
+      return;
+    }
+    if (data.skipped) return;
+    this.errors.delete(root);
+    if (root !== ui.root) return;
+    ui.setSyncError(null);
+    // Un état plus récent (commit, changement d'onglet…) a été affiché pendant le fetch : son instantané, pris avant,
+    // l'écraserait. On en relit un frais, lui aussi écarté si l'état bouge encore entre-temps.
+    if (ui.generation !== generation) {
+      const seen = ui.generation;
+      const fresh = await window.workbench.refresh(root).catch(() => null);
+      if (!fresh || root !== ui.root || ui.generation !== seen) return;
+      data = fresh;
+    }
+    // Rien de neuf côté distant : on ne redessine pas sous les yeux de l'utilisateur.
+    if (JSON.stringify(data.refs) !== JSON.stringify(ui.refs)) ui.update(data.status, data.graph, data.refs);
+  },
+  onFocus() {
+    clearTimeout(this.focusTimer);
+    this.focusTimer = setTimeout(() => this.run(ui.root, { reason: 'focus' }), FOCUS_DEBOUNCE);
+  },
+  async configure() {
+    await this.load();
+    const enabled = element('input');
+    enabled.type = 'checkbox';
+    enabled.checked = this.settings.autoFetch;
+    const enabledLabel = element('label', 'update-startup');
+    enabledLabel.append(enabled, ' Récupérer automatiquement les branches distantes');
+    const interval = element('select');
+    for (const minutes of FETCH_INTERVALS) {
+      const option = element('option', '', minutes === 1 ? 'Toutes les minutes' : `Toutes les ${minutes} minutes`);
+      option.value = String(minutes);
+      interval.append(option);
+    }
+    interval.value = String(this.settings.intervalMinutes);
+    const field = element('label', 'dialog-field');
+    field.append(element('span', 'eyebrow', 'FRÉQUENCE'), interval);
+    const hint = element('p', 'dialog-hint', 'Aussi à l’ouverture d’un dépôt et au retour sur la fenêtre. Seules les branches distantes sont mises à jour : la branche courante n’avance que par Pull, en avance rapide. Aucune invite d’identifiants n’est ouverte en arrière-plan.');
+    const changes = await modal('Fetch automatique', [enabledLabel, field, hint], {
+      confirmLabel: 'Enregistrer',
+      collect: () => ({ autoFetch: enabled.checked, intervalMinutes: Number(interval.value) }),
+    });
+    if (!changes) return;
+    const saved = await ui.invoke(() => window.workbench.setSyncSettings(changes));
+    if (!saved) return;
+    this.settings = saved;
+    this.schedule();
+    ui.message(saved.autoFetch ? `Fetch automatique toutes les ${saved.intervalMinutes} min.` : 'Fetch automatique désactivé.');
+  },
+};
+window.addEventListener('focus', () => autoFetch.onFocus());
+
 // Au lancement : rouvre les onglets de la session précédente et l'onglet qui était actif.
 (async () => {
   const session = await ui.invoke(() => window.workbench.restoreSession());
@@ -701,10 +1000,11 @@ document.addEventListener('keydown', (event) => {
 // Recherche de mise à jour au démarrage, seulement si elle a été activée dans « Mises à jour… ».
 checkOnStartup().then((found) => {
   setUpdate(found);
-  if (ui.update) ui.message(`Git Workbench ${ui.update.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
+  if (ui.pendingUpdate) ui.message(`Git Workbench ${ui.pendingUpdate.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
 });
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());
+$('#pull-button').addEventListener('click', () => ui.pull());
 $('#view-graph').addEventListener('click', () => ui.showGraph());
 $('#view-editor').addEventListener('click', () => ui.showEditor());
 $('#folder-button').addEventListener('click', (event) => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); ui.folderMenu(box.left, box.bottom + 4); });
@@ -718,7 +1018,6 @@ document.addEventListener('keydown', (event) => {
   }
 });
 $('#push-button').addEventListener('click', () => ui.push());
-$('#pull-button').addEventListener('click', () => ui.pull());
 $('#undo-button').addEventListener('click', () => ui.undo());
 $('#redo-button').addEventListener('click', () => ui.redo());
 // Ctrl+Z / Ctrl+Maj+Z (ou Ctrl+Y) hors d'un champ de saisie ou de l'éditeur, qui gardent leur propre annulation.

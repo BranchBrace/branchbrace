@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { buildPartialPatch, PartialStagingError, splitLines } from './partial-staging.js';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
 // Au-delà, un fichier n'est ni affiché dans l'éditeur ni comparé : Monaco resterait utilisable mais la page ralentirait.
@@ -11,6 +12,8 @@ const MAX_EDITABLE = 5 * 1024 * 1024;
 // Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REBASE_ACTIONS = ['pick', 'reword', 'squash', 'fixup', 'drop'];
+// Blob vide : une entrée « intent-to-add » (git add -N) le désigne sans qu'il soit forcément écrit dans les objets.
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 
 // Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
 // Héritées de l'environnement du processus hôte, elles peuvent détourner une
@@ -85,7 +88,8 @@ function runGit(cwd, args, options = {}) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      // `encoding: 'latin1'` garde les octets exacts (un caractère par octet), quel que soit l'encodage du fichier.
+      const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
     });
@@ -320,6 +324,14 @@ export class GitService {
     await runGit(this.repositoryPath, ['reset', '--', filePath]);
     return this.status();
   }
+
+  // Indexation partielle (A3). `request` décrit le diff affiché : `original` et `modified` tels que renvoyés par
+  // workingVersions, `changes` les blocs calculés par Monaco, `selection` les lignes choisies de chaque côté. Le patch
+  // passe par `git apply --cached` ; l'index est ensuite relu et restauré s'il diffère du résultat attendu.
+  // L'arbre de travail n'est jamais modifié (A11).
+  async stageLines(filePath, request) { return this.#applyLines(filePath, request, 'stage'); }
+
+  async unstageLines(filePath, request) { return this.#applyLines(filePath, request, 'unstage'); }
 
   async stageAll() {
     await this.#ensureRepositoryPath();
@@ -654,12 +666,120 @@ export class GitService {
   }
 
   // Contenu d'un blob (`HEAD:chemin`, `:chemin` pour l'index, `:2:chemin` pour un côté de conflit) ; null s'il n'existe pas.
-  async #blob(spec) {
+  async #blob(spec, encoding = 'utf8') {
     if (spec.includes('\0')) throw new GitWorkbenchError('invalid-path');
-    return runGit(this.repositoryPath, ['cat-file', 'blob', spec]).catch((error) => {
+    return runGit(this.repositoryPath, ['cat-file', 'blob', spec], { encoding }).catch((error) => {
       if (error.code === 'git-output-too-large') throw error;
       return null;
     });
+  }
+
+  // Les deux côtés du diff relus en octets exacts (latin1) : index → fichier pour indexer, HEAD → index pour désindexer.
+  // Le fichier de travail est lu tel que `git add` le verrait (filtres et conversion des fins de ligne appliqués).
+  async #partialSides(filePath, entry, stage) {
+    const [indexEntry, headEntry] = await Promise.all([
+      this.#indexEntry(filePath),
+      stage ? null : runGit(this.repositoryPath, ['ls-tree', '-z', 'HEAD', '--', filePath]).then((raw) => {
+        const [info, name] = raw.split('\0')[0].split('\t');
+        return name === filePath ? { mode: info.split(' ')[0] } : null;
+      }, () => null),
+    ]);
+    const indexContent = indexEntry ? (indexEntry.sha === EMPTY_BLOB ? '' : await this.#blob(indexEntry.sha, 'latin1')) : null;
+    if (!stage) {
+      const left = headEntry ? await this.#blob(`HEAD:${filePath}`, 'latin1') : null;
+      return { left, right: indexContent, displayedRight: indexContent, fileMode: indexEntry?.mode ?? headEntry?.mode };
+    }
+    if (entry.worktreeStatus === 'D') return { left: indexContent, right: null, displayedRight: null, fileMode: indexEntry?.mode };
+    const absolute = await this.#workingPath(filePath);
+    // lstat : un lien symbolique n'est pas un fichier texte à découper en lignes.
+    const info = await lstat(absolute);
+    if (!info.isFile() || info.size > MAX_EDITABLE) throw new GitWorkbenchError('partial-staging-unsupported');
+    const raw = (await readFile(absolute)).toString('latin1');
+    const sha = (await runGit(this.repositoryPath, ['hash-object', '-w', '--', filePath])).trim();
+    const right = await this.#blob(sha, 'latin1');
+    // Un filtre qui change autre chose que les fins de ligne (LFS, ident…) : les lignes affichées ne sont pas celles
+    // que Git indexerait.
+    if (right === null || splitLines(raw).texts.join('\n') !== splitLines(right).texts.join('\n')) throw new GitWorkbenchError('partial-staging-unsupported');
+    const executable = process.platform !== 'win32' && (info.mode & 0o111) !== 0;
+    return { left: indexContent, right, displayedRight: raw, fileMode: indexEntry?.mode ?? (executable ? '100755' : '100644') };
+  }
+
+  async #applyLines(filePath, request, mode) {
+    const entry = await this.#statusEntry(filePath);
+    if (entry.conflicted || entry.originalPath) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (typeof request?.original !== 'string' || typeof request?.modified !== 'string') throw new GitWorkbenchError('invalid-content');
+    const stage = mode === 'stage';
+    const { left, right, displayedRight, fileMode } = await this.#partialSides(filePath, entry, stage);
+    if (isBinary(left) || isBinary(right) || (fileMode !== '100644' && fileMode !== '100755')) throw new GitWorkbenchError('partial-staging-unsupported');
+    // Le diff affiché doit être exactement celui du disque : sinon les numéros de ligne choisis ne désignent plus rien.
+    const decode = (text) => Buffer.from(text ?? '', 'latin1').toString('utf8');
+    if (decode(left) !== request.original || decode(displayedRight) !== request.modified) throw new GitWorkbenchError('diff-outdated');
+    let plan;
+    try {
+      plan = buildPartialPatch({ path: filePath, mode, left, right, changes: request.changes, selection: request.selection, fileMode });
+    } catch (error) {
+      if (error instanceof PartialStagingError) throw new GitWorkbenchError(error.code);
+      throw error;
+    }
+
+    const gitDirectory = await this.#gitDirectory();
+    const indexPath = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-path', 'index'])).trim());
+    const before = await this.#stagedRecords();
+    const backup = await readFile(indexPath).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+    const patchPath = path.join(gitDirectory, `git-workbench-partial-${randomUUID()}.patch`);
+    await writeFile(patchPath, Buffer.from(plan.patch, 'latin1'), { mode: 0o600 });
+    try {
+      // --whitespace=nowarn : une configuration apply.whitespace=fix ne doit pas retoucher les lignes choisies.
+      // core.longpaths : sous Windows, le chemin du patch dans un dépôt profond dépasse vite 260 caractères.
+      await runGit(this.repositoryPath, ['-c', 'core.longpaths=true', 'apply', '--cached', '--whitespace=nowarn', ...(stage ? [] : ['--reverse']), patchPath]);
+    } catch {
+      // `git apply` est atomique : en cas de refus, l'index n'a pas été touché.
+      throw new GitWorkbenchError('partial-apply-failed');
+    } finally {
+      await rm(patchPath, { force: true });
+    }
+    if (await this.#indexMatches(filePath, before, { ...plan, fileMode })) return this.status();
+    try {
+      if (backup === null) await rm(indexPath, { force: true });
+      else {
+        const temporary = `${indexPath}.git-workbench-restore`;
+        await writeFile(temporary, backup);
+        await rename(temporary, indexPath);
+      }
+    } catch {
+      throw new GitWorkbenchError('partial-restore-failed');
+    }
+    throw new GitWorkbenchError('partial-verification-failed');
+  }
+
+  async #indexEntry(filePath) {
+    const raw = await runGit(this.repositoryPath, ['ls-files', '--stage', '-z', '--', `:(literal)${filePath}`]);
+    for (const record of raw.split('\0')) {
+      const [info, name] = record.split('\t');
+      if (name === filePath) { const [mode, sha] = info.split(' '); return { mode, sha }; }
+    }
+    return null;
+  }
+
+  // Ce que `git diff --cached` rapporte pour chaque chemin (modes et objets avant/après, statut).
+  async #stagedRecords() {
+    const fields = (await runGit(this.repositoryPath, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff'])).split('\0');
+    const records = new Map();
+    for (let i = 0; i + 1 < fields.length; i += 2) records.set(fields[i + 1], fields[i].replace(/^\n/, ''));
+    return records;
+  }
+
+  // Garde de fiabilité : seuls le chemin visé et son contenu attendu ont changé dans l'index.
+  async #indexMatches(filePath, before, expected) {
+    const after = await this.#stagedRecords();
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+      if (key !== filePath && before.get(key) !== after.get(key)) return false;
+    }
+    const entry = await this.#indexEntry(filePath);
+    if (!expected.exists) return entry === null;
+    if (!entry || entry.mode !== expected.fileMode) return false;
+    const content = entry.sha === EMPTY_BLOB ? '' : await this.#blob(entry.sha, 'latin1');
+    return content === expected.content;
   }
 
   #versions(original, modified, { editable }) {

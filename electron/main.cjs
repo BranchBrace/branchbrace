@@ -260,6 +260,8 @@ Un point de récupération local sera conservé.`)) return null;
   // Seuls le push (transmission hors de la machine) et les rebases (réécriture de l'historique) en demandent une.
   handle('repository:stage', async (_event, { root, path: filePath }) => service(root).stage(filePath));
   handle('repository:unstage', async (_event, { root, path: filePath }) => service(root).unstage(filePath));
+  handle('repository:stage-lines', async (_event, { root, path: filePath, request }) => service(root).stageLines(filePath, request));
+  handle('repository:unstage-lines', async (_event, { root, path: filePath, request }) => service(root).unstageLines(filePath, request));
   handle('repository:stage-all', async (_event, { root }) => service(root).stageAll());
   handle('repository:unstage-all', async (_event, { root }) => service(root).unstageAll());
   handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));

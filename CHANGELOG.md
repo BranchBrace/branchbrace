@@ -1,3 +1,11 @@
+# [1.1.0-rc.5](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.4...v1.1.0-rc.5) (2026-11-01)
+
+
+### Features
+
+* gérer les remotes et le push forcé avec lease ([76a6bf4](https://github.com/monnierant/git-workbench/commit/76a6bf4a7b58e7a636cf75639032ab0a078e5a18))
+* **git:** revert, renommage de branche et tags depuis le graphe ([7fe8d86](https://github.com/monnierant/git-workbench/commit/7fe8d862347fbc1b003ce771b412ae39dd99553e))
+
 # [1.1.0-rc.4](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.3...v1.1.0-rc.4) (2026-11-01)
 
 

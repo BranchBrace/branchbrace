@@ -121,6 +121,19 @@ test('file resolution prefers file names, longer extensions, then imported over 
   assert.deepEqual(catalog.extensions.map((item) => item.source), ['builtin', 'installed', 'installed', 'imported']);
 });
 
+test('an installed extension claims files only for the languages whose grammar it brings', () => {
+  const ext = (id, source, languages, grammars) => ({ id, name: id, version: '1.0.0', source, languages, grammars });
+  const language = (id, extensions) => ({ id, extensions, filenames: [], aliases: [], configuration: null });
+  const grammar = (scopeName, lang) => ({ scopeName, path: 'g.json', language: lang, injectTo: [], embeddedLanguages: {} });
+  const catalog = buildCatalog([
+    ext('vscode.rust', 'builtin', [language('rust', ['.rs'])], [grammar('source.rust', 'rust')]),
+    ext('rust-lang.rust-analyzer', 'installed', [language('rust', ['.rs']), language('ra_syntax_tree', ['.rast'])], [grammar('source.ra_syntax_tree', 'ra_syntax_tree')]),
+  ]);
+  assert.equal(resolveLanguage('src/lib.rs', catalog, ['installed', 'imported']), null, 'the builtin rust grammar stays behind Monarch');
+  assert.equal(resolveLanguage('src/lib.rs', catalog, ['builtin']).scopeName, 'source.rust');
+  assert.equal(resolveLanguage('tree.rast', catalog, ['installed', 'imported']).scopeName, 'source.ra_syntax_tree');
+});
+
 test('injections and token selection follow the theme rules', () => {
   const catalog = buildCatalog([readManifest(astro, 'installed')]);
   assert.deepEqual(injectionsFor('source.astro', catalog), ['text.html.markdown.astro']);
@@ -182,6 +195,21 @@ test('a .vsix is imported with only its grammars, replaces older imports and can
   await assert.rejects(removeImported(target, 'prisma.prisma'), { code: 'extension-not-found' });
 }));
 
+test('an import that cannot take the place of the previous version keeps that version', () => temporary(async (root) => {
+  const prisma = (version) => ({ publisher: 'Prisma', name: 'prisma', version, contributes: { languages: [{ id: 'prisma', extensions: ['.prisma'] }], grammars: [{ language: 'prisma', scopeName: 'source.prisma', path: './prisma.json' }] } });
+  const vsix = (version) => zip({ 'extension/package.json': JSON.stringify(prisma(version)), 'extension/prisma.json': '{"scopeName":"source.prisma","patterns":[]}' });
+  await writeFile(path.join(root, 'old.vsix'), vsix('5.0.0'));
+  await writeFile(path.join(root, 'new.vsix'), vsix('6.0.0'));
+  const target = path.join(root, 'target');
+  await importVsix(path.join(root, 'old.vsix'), target);
+  // Un dossier non vide (sans manifeste) occupe la place de la nouvelle version : le rename du dossier extrait échoue.
+  await mkdir(path.join(target, 'prisma.prisma-6.0.0'));
+  await writeFile(path.join(target, 'prisma.prisma-6.0.0', 'locked.txt'), 'locked');
+  await assert.rejects(importVsix(path.join(root, 'new.vsix'), target), { code: 'extension-invalid' });
+  assert.deepEqual((await readdir(target)).sort(), ['prisma.prisma-5.0.0', 'prisma.prisma-6.0.0']);
+  await access(path.join(target, 'prisma.prisma-5.0.0', 'prisma.json'));
+}));
+
 test('archives that are not extensions with grammars are refused', () => temporary(async (root) => {
   await writeFile(path.join(root, 'notzip.vsix'), 'plain text');
   await writeFile(path.join(root, 'theme.vsix'), zip({ 'extension/package.json': JSON.stringify({ name: 'theme', contributes: { themes: [] } }) }));
@@ -196,6 +224,9 @@ test('archives that are not extensions with grammars are refused', () => tempora
 test('the Oniguruma WebAssembly engine ships with the packaged app and may run under the page CSP', async () => {
   assert.equal(manifest.dependencies['vscode-oniguruma'], manifest.dependencies['vscode-oniguruma'].replace(/^[\^~]/, ''), 'exact version');
   assert.ok(manifest.build.files.includes('node_modules/vscode-oniguruma/release/onig.wasm'));
+  assert.ok(manifest.build.files.includes('THIRD_PARTY_NOTICES.md'), 'third-party notices ship with the app');
+  const notices = await readFile(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8');
+  for (const name of ['vscode-textmate', 'vscode-oniguruma', 'Oniguruma — BSD-2-Clause']) assert.ok(notices.includes(name), name);
   assert.ok(manifest.build.files.includes('src/extensions.js') && manifest.build.files.includes('src/grammar-catalog.js'), 'main process modules are packaged');
   await access(createRequire(import.meta.url).resolve('vscode-oniguruma/release/onig.wasm'));
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');

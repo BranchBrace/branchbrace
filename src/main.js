@@ -622,8 +622,8 @@ $('#new-tab').addEventListener('click', chooseRepository);
 const windowAction = (action) => ui.invoke(() => window.workbench.windowAction(action));
 // Une version plus récente trouvée (au démarrage ou depuis la fenêtre) est signalée par une pastille sur le menu.
 const setUpdate = (found) => {
-  ui.update = found?.available ? found : null;
-  $('#app-menu').classList.toggle('has-update', Boolean(ui.update));
+  ui.pendingUpdate = found?.available ? found : null;
+  $('#app-menu').classList.toggle('has-update', Boolean(ui.pendingUpdate));
 };
 const appMenu = () => {
   const box = $('#app-menu').getBoundingClientRect();
@@ -639,7 +639,7 @@ const appMenu = () => {
     ['Taille normale', () => windowAction('zoom-reset'), false, 'Ctrl+0'],
     ['Plein écran', () => windowAction('fullscreen'), false, 'F11'],
     null,
-    [ui.update ? `Mise à jour disponible (${ui.update.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.update), onResult: setUpdate })],
+    [ui.pendingUpdate ? `Mise à jour disponible (${ui.pendingUpdate.latest.version})…` : 'Mises à jour…', () => openUpdates({ check: Boolean(ui.pendingUpdate), onResult: setUpdate })],
     ['Recharger la fenêtre', () => windowAction('reload')],
     import.meta.env.DEV ? ['Outils de développement', () => windowAction('devtools'), false, 'Ctrl+Maj+I'] : undefined,
     null,
@@ -672,7 +672,7 @@ document.addEventListener('keydown', (event) => {
 // Recherche de mise à jour au démarrage, seulement si elle a été activée dans « Mises à jour… ».
 checkOnStartup().then((found) => {
   setUpdate(found);
-  if (ui.update) ui.message(`Git Workbench ${ui.update.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
+  if (ui.pendingUpdate) ui.message(`Git Workbench ${ui.pendingUpdate.latest.version} est disponible : menu ☰ › Mise à jour disponible.`);
 });
 $('#refresh').addEventListener('click', () => ui.reload());
 $('#fetch-button').addEventListener('click', () => ui.fetch());

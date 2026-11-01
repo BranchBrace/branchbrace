@@ -72,7 +72,7 @@ Correctif (`scripts/package-windows-release.sh`) : `chown -R <uid hôte>:<gid h�
 
 ## Hors MVP / limites
 
-- Stage/unstage par fichier entier seulement ; pas de staging partiel par hunk.
+- Stage/unstage partiel (bloc, ligne) : `git apply --cached` puis relecture de `git diff --cached` et du contenu indexé, restauration de l’index en cas d’écart (`test/partial-staging.test.js`). Refusé pour les fichiers renommés, en conflit, binaires, liens symboliques, à filtre Git autre que les fins de ligne, ou à fins de ligne CR seules : ceux-là s’indexent en entier. Le chemin « vérification échouée → index restauré » n’est pas reproduit par un test (aucune fixture ne fait diverger `git apply`) ; le refus de `git apply` (index verrouillé) l’est.
 - Rebase interactif : actions `pick`, `drop`, `fixup` uniquement ; pas de reword/edit/squash.
 - Pas de merge, fetch/pull automatique, résolution intégrée de conflits, force-push, opérations reset/discard/amend/squash, intégrations d’hébergeur, comptes, télémétrie ni distribution publique.
 - Une référence `refs/git-workbench/recovery/...` est conservée avant cherry-pick/rebase. Après conflit, le dépôt reste dans l’état Git d’opération interrompue ; terminer avec Git ou utiliser la commande `--abort` indiquée dans le message.

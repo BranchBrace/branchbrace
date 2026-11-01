@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { buildPartialPatch, PartialStagingError, splitLines } from './partial-staging.js';
 
 const MAX_BUFFER = 16 * 1024 * 1024;
 // Au-delà, un fichier n'est ni affiché dans l'éditeur ni comparé : Monaco resterait utilisable mais la page ralentirait.
@@ -11,6 +12,8 @@ const MAX_EDITABLE = 5 * 1024 * 1024;
 // Codes `XY` de `git status` d'un chemin non fusionné (conflit en cours de résolution).
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REBASE_ACTIONS = ['pick', 'reword', 'squash', 'fixup', 'drop'];
+// Blob vide : une entrée « intent-to-add » (git add -N) le désigne sans qu'il soit forcément écrit dans les objets.
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 
 // Ces variables redéfinissent où Git lit/écrit le dépôt, l'index ou les objets.
 // Héritées de l'environnement du processus hôte, elles peuvent détourner une
@@ -26,9 +29,9 @@ const DANGEROUS_GIT_ENV_VARS = [
   'GIT_CEILING_DIRECTORIES',
 ];
 
-function sanitizedEnv(extra = {}) {
+function sanitizedEnv(extra = {}, unset = []) {
   const env = { ...process.env, ...extra };
-  for (const name of DANGEROUS_GIT_ENV_VARS) delete env[name];
+  for (const name of [...DANGEROUS_GIT_ENV_VARS, ...unset]) delete env[name];
   return env;
 }
 
@@ -53,7 +56,7 @@ function runGit(cwd, args, options = {}) {
       cwd,
       shell: false,
       windowsHide: true,
-      env: sanitizedEnv(options.env),
+      env: sanitizedEnv(options.env, options.unsetEnv),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];
@@ -85,21 +88,30 @@ function runGit(cwd, args, options = {}) {
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      // `encoding: 'latin1'` garde les octets exacts (un caractère par octet), quel que soit l'encodage du fichier.
+      const result = { stdout: Buffer.concat(stdout).toString(options.encoding || 'utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
       if (code === 0 || options.acceptExitCodes?.includes(code)) return resolve(result.stdout);
       reject(new GitWorkbenchError(classifyFailure(args, result.stderr)));
     });
   });
 }
 
-function classifyFailure(args, stderr) {
+function classifyFailure(allArgs, stderr) {
+  // Les options `-c clé=valeur` placées avant la sous-commande ne comptent pas pour la reconnaître.
+  let args = allArgs;
+  while (args[0] === '-c') args = args.slice(2);
   const text = stderr.toLowerCase();
+  // Une branche ne peut être extraite que dans une seule worktree (« is already used by worktree at », ou
+  // « is already checked out at » avant Git 2.42).
+  if (text.includes('already used by worktree') || text.includes('is already checked out at')) return 'branch-in-other-worktree';
+  if (args[0] === 'worktree' && text.includes('modified or untracked files')) return 'worktree-dirty';
+  if (args[0] === 'worktree' && text.includes('locked')) return 'worktree-locked';
+  if (args[0] === 'worktree' && text.includes('already exists')) return 'worktree-path-exists';
   if (text.includes('conflict') || text.includes('could not apply') || text.includes('fix conflicts')) return 'conflict';
   if (args[0] === 'push' && (text.includes('rejected') || text.includes('non-fast-forward'))) return 'push-rejected';
   if (args[0] === 'push') return 'push-indeterminate';
   if (args[0] === 'fetch') return 'fetch-failed';
-  if (text.includes('not a git repository')) return 'not-a-repository';
-  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
+  if (text.includes('not a git repository')) return 'not-a-repository';  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
   return 'git-operation-failed';
 }
 
@@ -115,14 +127,49 @@ export class GitWorkbenchError extends Error {
 
 // En-tête de `status --branch` : « ## main...origin/main [ahead 1] », « ## main », « ## HEAD (no branch) »
 // ou « ## No commits yet on main ». Un upstream « [gone] » (branche distante supprimée) compte comme absent.
+// L'avance et le retard sur l'upstream (↑ ahead, ↓ behind) se lisent dans le même en-tête.
 export function parseBranchHeader(header) {
   const text = header.slice(3);
-  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null };
+  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 };
   const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text);
-  if (unborn) return { branch: unborn[1], upstream: null };
+  if (unborn) return { branch: unborn[1], upstream: null, ahead: 0, behind: 0 };
   const [names, tracking = ''] = text.split(' [');
   const [branch, upstream] = names.split('...');
-  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null };
+  const ahead = Number(/ahead (\d+)/.exec(tracking)?.[1] || 0);
+  const behind = Number(/behind (\d+)/.exec(tracking)?.[1] || 0);
+  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null, ahead, behind };
+}
+
+// Options d'un fetch lancé sans action de l'utilisateur. GIT_TERMINAL_PROMPT=0 ne coupe que le terminal : un
+// `core.askPass` vide l'emporte sur tout programme d'invite configuré (et sur SSH_ASKPASS), et
+// `credential.interactive=false` interdit à Git Credential Manager d'ouvrir une fenêtre.
+export const NON_INTERACTIVE_CONFIG = ['-c', 'core.askPass=', '-c', 'credential.interactive=false'];
+// Hérités du processus, ces programmes d'invite ouvriraient une fenêtre d'identifiants à chaque fetch automatique.
+export const INTERACTIVE_ENV_VARS = ['GIT_ASKPASS', 'SSH_ASKPASS'];
+
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+
+// Nom du programme d'une commande SSH (« "C:\PuTTY\plink.exe" -v » → « plink »), comme Git le lit pour deviner le client.
+function sshProgramName(command) {
+  const match = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(command);
+  const program = match ? match[1] ?? match[2] ?? match[3] : '';
+  return path.posix.basename(program.replaceAll('\\', '/')).toLowerCase().replace(/\.exe$/, '');
+}
+
+// Environnement du fetch d'arrière-plan : aucune invite d'identifiants ne doit bloquer ni ouvrir de fenêtre. Un helper
+// qui a déjà le secret le fournit toujours. La commande SSH effective est calculée avec la priorité de Git
+// (GIT_SSH_COMMAND, puis core.sshCommand, puis GIT_SSH) puis rendue non interactive selon le client : BatchMode pour
+// OpenSSH, `-batch` pour plink/PuTTY (TortoisePlink le reçoit déjà de Git). Un client inconnu n'est pas modifié.
+export function nonInteractiveEnv({ sshCommand = null, sshVariant = null } = {}, environment = process.env) {
+  const env = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never' };
+  const command = environment.GIT_SSH_COMMAND || sshCommand || (environment.GIT_SSH ? shellQuote(environment.GIT_SSH) : 'ssh');
+  const name = sshProgramName(command);
+  const variant = (environment.GIT_SSH_VARIANT || sshVariant || '').toLowerCase()
+    || ({ ssh: 'ssh', plink: 'plink', tortoiseplink: 'tortoiseplink' })[name] || 'auto';
+  if (variant === 'plink' || variant === 'putty') Object.assign(env, { GIT_SSH_COMMAND: `${command} -batch`, GIT_SSH_VARIANT: variant });
+  else if (variant === 'tortoiseplink') Object.assign(env, { GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: variant });
+  else if (variant === 'ssh') env.GIT_SSH_COMMAND = `${command} -o BatchMode=yes`;
+  return env;
 }
 
 function parseStatus(raw) {
@@ -183,6 +230,43 @@ export function remoteWebUrl(url) {
   return { host, path: pathname, provider, web: `https://${host}/${pathname}` };
 }
 
+// Deux chemins désignent-ils le même dossier ? Git écrit « C:/x » sous Windows, où la casse ne compte pas.
+export function samePath(a, b) {
+  const normalize = (value) => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value));
+  return normalize(a) === normalize(b);
+}
+
+// `child` est-il `parent` lui-même ou un chemin à l'intérieur ?
+export function isInside(child, parent) {
+  const normalize = (value) => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value));
+  const relative = path.relative(normalize(parent), normalize(child));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+// `git worktree list --porcelain -z` : un attribut par champ, une worktree par bloc terminé par un champ vide. La
+// première est la worktree principale ; `current` désigne celle du dépôt ouvert. Sans `-z` (Git < 2.36), les champs
+// sont séparés par des retours à la ligne : `separator` vaut alors '\n'.
+export function parseWorktrees(raw, currentPath, separator = '\0') {
+  const worktrees = [];
+  let item = null;
+  for (const field of raw.split(separator).map((value) => (separator === '\n' ? value.replace(/\r$/, '') : value))) {
+    if (!field) { item = null; continue; }
+    const [key, ...rest] = field.split(' ');
+    const value = rest.join(' ');
+    if (key === 'worktree') {
+      item = { path: path.resolve(value), head: null, branch: null, detached: false, bare: false, locked: false, prunable: false, main: !worktrees.length, current: samePath(value, currentPath) };
+      worktrees.push(item);
+    } else if (!item) continue;
+    else if (key === 'HEAD') item.head = value;
+    else if (key === 'branch') item.branch = value.startsWith('refs/heads/') ? value.slice(11) : value;
+    else if (key === 'detached') item.detached = true;
+    else if (key === 'bare') item.bare = true;
+    else if (key === 'locked') item.locked = value || true;
+    else if (key === 'prunable') item.prunable = value || true;
+  }
+  return worktrees;
+}
+
 // Contenu lu par Git ou sur disque : un octet nul signale un fichier binaire, qu'on ne montre pas comme du texte.
 const isBinary = (text) => typeof text === 'string' && text.slice(0, 8000).includes('\0');
 
@@ -227,9 +311,39 @@ export class GitService {
 
   // Récupère les branches de tous les dépôts distants. `--prune` retire les copies locales des branches supprimées
   // côté serveur : seules des références de suivi changent, jamais une branche locale ni l'arbre de travail.
-  async fetch() {
-    await this.#ensureRepositoryPath();
-    await runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules']);
+  // En arrière-plan (`background`), le fetch est sauté si un fetch ou un pull est en cours ou attend son tour, ou si
+  // une opération Git (rebase, merge, cherry-pick) attend d'être terminée, et ne peut jamais demander d'identifiants.
+  // Le test « en vol » et la prise du verrou sont synchrones : aucun appel ne peut se glisser entre les deux.
+  fetch({ background = false } = {}) {
+    if (background && this.#syncPending) return Promise.resolve({ skipped: 'in-flight' });
+    return this.#exclusiveSync(async () => {
+      await this.#ensureRepositoryPath();
+      if (background) {
+        const operation = await this.operation();
+        if (operation) return { skipped: 'operation', operation };
+      }
+      const args = ['fetch', '--all', '--prune', '--no-recurse-submodules'];
+      if (!background) await runGit(this.repositoryPath, args);
+      else await runGit(this.repositoryPath, [...NON_INTERACTIVE_CONFIG, ...args], { env: nonInteractiveEnv(await this.#sshSettings()), unsetEnv: INTERACTIVE_ENV_VARS });
+      return { skipped: null };
+    });
+  }
+
+  // Fetch et pull écrivent les mêmes références de suivi : ils passent un par un dans l'ordre d'arrivée (deux fetch
+  // simultanés échoueraient sur « cannot lock ref »). `#syncPending` compte les tâches en cours ou en attente.
+  #syncQueue = Promise.resolve();
+  #syncPending = 0;
+  #exclusiveSync(task) {
+    this.#syncPending += 1;
+    const run = this.#syncQueue.then(task).finally(() => { this.#syncPending -= 1; });
+    this.#syncQueue = run.catch(() => {});
+    return run;
+  }
+
+  async #sshSettings() {
+    const read = (key) => runGit(this.repositoryPath, ['config', '--get', key], { acceptExitCodes: [1] }).then((value) => value.trim() || null);
+    const [sshCommand, sshVariant] = await Promise.all([read('core.sshCommand'), read('ssh.variant')]);
+    return { sshCommand, sshVariant };
   }
 
   // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.
@@ -321,6 +435,14 @@ export class GitService {
     return this.status();
   }
 
+  // Indexation partielle (A3). `request` décrit le diff affiché : `original` et `modified` tels que renvoyés par
+  // workingVersions, `changes` les blocs calculés par Monaco, `selection` les lignes choisies de chaque côté. Le patch
+  // passe par `git apply --cached` ; l'index est ensuite relu et restauré s'il diffère du résultat attendu.
+  // L'arbre de travail n'est jamais modifié (A11).
+  async stageLines(filePath, request) { return this.#applyLines(filePath, request, 'stage'); }
+
+  async unstageLines(filePath, request) { return this.#applyLines(filePath, request, 'unstage'); }
+
   async stageAll() {
     await this.#ensureRepositoryPath();
     await runGit(this.repositoryPath, ['add', '--all']);
@@ -380,18 +502,151 @@ export class GitService {
     return this.status();
   }
 
+  // Renomme une branche locale (`branch -m`, jamais `-M` : un nom déjà pris est refusé). Git déplace aussi sa
+  // configuration, donc son upstream. Avec `remote`, la branche distante suivie est renommée de la même façon : le
+  // nouveau nom est poussé puis vérifié, l'upstream le suit, et l'ancien nom n'est supprimé du dépôt distant que s'il
+  // pointe encore exactement sur le commit qui vient d'être copié : aucun commit distant ne peut être perdu.
+  async renameBranch(oldName, newName, { remote = false } = {}) {
+    await this.#ensureRepositoryPath();
+    this.#validateBranchName(oldName);
+    await this.#checkBranchName(newName);
+    const { local } = await this.references();
+    const branch = local.find((item) => item.name === oldName);
+    if (!branch) throw new GitWorkbenchError('branch-not-found');
+    if (oldName === newName) return { branch: newName, remote: null };
+    if (local.some((item) => item.name === newName)) throw new GitWorkbenchError('branch-name-taken');
+    const target = remote ? await this.#remoteRenameTarget(branch, newName) : null;
+    await runGit(this.repositoryPath, ['branch', '-m', '--', oldName, newName]);
+    if (!target) return { branch: newName, remote: null };
+    // La branche est déjà renommée en local : un échec de publication le dit explicitement, pour que la vue suive
+    // le nouveau nom.
+    try {
+      await runGit(this.repositoryPath, ['push', '--porcelain', target.remote, `refs/heads/${newName}:refs/heads/${newName}`]);
+      if (await this.#remoteHead(target.remote, newName) !== branch.hash) throw new Error('verification');
+      // L'upstream est écrit dans la configuration plutôt que par `--set-upstream-to` : celui-ci exige le ref
+      // `<remote>/<nom>`, absent d'un clone single-branch.
+      await runGit(this.repositoryPath, ['config', `branch.${newName}.remote`, target.remote]);
+      await runGit(this.repositoryPath, ['config', `branch.${newName}.merge`, `refs/heads/${newName}`]);
+    } catch { throw new GitWorkbenchError('remote-rename-publish-failed'); }
+    const renamed = { name: target.remote, from: target.branch, to: newName };
+    try {
+      await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=refs/heads/${target.branch}:${branch.hash}`, target.remote, `:refs/heads/${target.branch}`]);
+    } catch { return { branch: newName, remote: { ...renamed, oldBranchKept: true } }; }
+    return { branch: newName, remote: renamed };
+  }
+
+  // Branche distante à renommer avec la locale : elle doit exister, pointer sur le même commit (sinon des commits
+  // seraient d'un seul côté) et le nouveau nom doit être libre sur le serveur.
+  async #remoteRenameTarget(branch, newName) {
+    if (!branch.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+    const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.remote`], { acceptExitCodes: [1] })).trim();
+    const merge = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.merge`], { acceptExitCodes: [1] })).trim();
+    if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) throw new GitWorkbenchError('upstream-missing');
+    const target = { remote, branch: merge.slice(11) };
+    const [current, taken] = await Promise.all([this.#remoteHead(remote, target.branch), this.#remoteHead(remote, newName)]);
+    if (current !== branch.hash) throw new GitWorkbenchError('remote-rename-diverged');
+    if (taken) throw new GitWorkbenchError('branch-name-taken-remote');
+    return target;
+  }
+
+  async #remoteHead(remote, branch) {
+    const raw = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]).catch(() => { throw new GitWorkbenchError('fetch-failed'); });
+    return raw.split('\n').map((line) => line.split(/\s+/)).find(([, ref]) => ref === `refs/heads/${branch}`)?.[0] ?? null;
+  }
+
+  // `check-ref-format --branch` valide le nom selon les règles de Git ; il développe aussi « @{-1} » en nom réel,
+  // qu'on refuse : le nom saisi doit être exactement celui qui sera créé.
+  async #checkBranchName(name) {
+    this.#validateBranchName(name);
+    const checked = await runGit(this.repositoryPath, ['check-ref-format', '--branch', name]).catch(() => { throw new GitWorkbenchError('invalid-branch-name'); });
+    if (checked.trim() !== name) throw new GitWorkbenchError('invalid-branch-name');
+  }
+
+  // `-z` n'existe que depuis Git 2.36 : sans lui, la sortie ligne à ligne est lue à la place. Si Git ne sait pas du
+  // tout lister les worktrees, la liste est vide : le dépôt s'ouvre quand même (références et instantané en dépendent).
+  async worktrees() {
+    await this.#ensureRepositoryPath();
+    try {
+      return parseWorktrees(await runGit(this.repositoryPath, ['worktree', 'list', '--porcelain', '-z']), this.repositoryPath);
+    } catch {
+      try {
+        return parseWorktrees(await runGit(this.repositoryPath, ['worktree', 'list', '--porcelain']), this.repositoryPath, '\n');
+      } catch { return []; }
+    }
+  }
+
+  // Nouvelle worktree dans `target` (absent ou vide), sur une branche existante qui n'est extraite nulle part, ou sur
+  // une nouvelle branche créée depuis `startPoint` (HEAD par défaut).
+  async addWorktree(target, { branch, newBranch = false, startPoint = null } = {}) {
+    await this.#ensureRepositoryPath();
+    if (typeof target !== 'string' || !target || target.includes('\0') || !path.isAbsolute(target)) throw new GitWorkbenchError('invalid-path');
+    const destination = path.resolve(target);
+    // Une worktree imbriquée dans une autre y apparaîtrait comme un dossier non suivi (et serait committable).
+    if ((await this.worktrees()).some((item) => isInside(destination, item.path))) throw new GitWorkbenchError('worktree-path-inside-worktree');
+    if (existsSync(destination) && (await readdir(destination).catch(() => { throw new GitWorkbenchError('worktree-path-exists'); })).length) throw new GitWorkbenchError('worktree-path-exists');
+    if (newBranch) {
+      await this.#checkBranchName(branch);
+      if ((await this.branches()).some((item) => item.name === branch)) throw new GitWorkbenchError('branch-name-taken');
+      const base = startPoint ? await this.#resolveCommit(startPoint) : 'HEAD';
+      await runGit(this.repositoryPath, ['worktree', 'add', '--quiet', '-b', branch, '--', destination, base]);
+    } else {
+      this.#validateBranchName(branch);
+      if (!(await this.branches()).some((item) => item.name === branch)) throw new GitWorkbenchError('branch-not-found');
+      if ((await this.worktrees()).some((item) => item.branch === branch)) throw new GitWorkbenchError('branch-in-other-worktree');
+      await runGit(this.repositoryPath, ['worktree', 'add', '--quiet', '--', destination, branch]);
+    }
+    return { path: destination, branch };
+  }
+
+  // Supprime une worktree liée sans `--force` : Git refuse s'il y reste des changements non commités ou des fichiers
+  // non suivis, qui seraient perdus. Sa branche est conservée. Une worktree dont le dossier a disparu est seulement
+  // oubliée : seules ses métadonnées sont effacées, jamais celles des autres (un `prune` global oublierait aussi une
+  // worktree sur un disque momentanément débranché).
+  async removeWorktree(target) {
+    const worktree = (await this.worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree) throw new GitWorkbenchError('worktree-not-found');
+    if (worktree.main) throw new GitWorkbenchError('worktree-main');
+    if (worktree.current) throw new GitWorkbenchError('worktree-current');
+    if (worktree.locked) throw new GitWorkbenchError('worktree-locked');
+    if (worktree.prunable) await this.#forgetWorktree(worktree.path);
+    else await runGit(this.repositoryPath, ['worktree', 'remove', '--', worktree.path]);
+    return this.worktrees();
+  }
+
+  // Efface `.git/worktrees/<id>` de la seule worktree introuvable visée : celle dont le fichier `gitdir` désigne
+  // `<chemin>/.git`. Refusé si son dossier est de nouveau présent.
+  async #forgetWorktree(worktreePath) {
+    if (existsSync(worktreePath)) throw new GitWorkbenchError('worktree-not-found');
+    const common = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-common-dir'])).trim());
+    const admin = path.join(common, 'worktrees');
+    for (const entry of await readdir(admin).catch(() => [])) {
+      const gitdir = (await readFile(path.join(admin, entry, 'gitdir'), 'utf8').catch(() => '')).trim();
+      if (!gitdir || !samePath(path.dirname(path.resolve(admin, entry, gitdir)), worktreePath)) continue;
+      await rm(path.join(admin, entry), { recursive: true, force: true });
+      return;
+    }
+    throw new GitWorkbenchError('worktree-not-found');
+  }
+
+  async pruneWorktrees() {
+    await this.#ensureRepositoryPath();
+    await runGit(this.repositoryPath, ['worktree', 'prune']);
+    return this.worktrees();
+  }
+
   async references() {
     await this.#ensureRepositoryPath();
-    const [raw, urls] = await Promise.all([
+    const [raw, urls, worktrees] = await Promise.all([
       runGit(this.repositoryPath, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track,nobracket)', 'refs/heads', 'refs/remotes', 'refs/tags']),
       runGit(this.repositoryPath, ['config', '--get-regexp', '^remote\\..*\\.url$'], { acceptExitCodes: [1] }),
+      this.worktrees(),
     ]);
     // Dépôts distants configurés et leur page web : l'URL Git brute (qui peut contenir un jeton) ne quitte pas ce module.
     const remotes = urls.split('\n').filter(Boolean).map((line) => {
       const [key, ...value] = line.split(' ');
       return { name: key.slice(7, -4), ...(remoteWebUrl(value.join(' ')) || { host: null, path: null, provider: 'git', web: null }) };
     }).sort((a, b) => b.name.length - a.name.length);
-    const result = { local: [], remote: [], tags: [], remotes: [] };
+    const result = { local: [], remote: [], tags: [], remotes: [], worktrees };
     for (const line of raw.split('\n').filter(Boolean)) {
       // %(*objectname) est le commit pointé par un tag annoté.
       const [ref, object, peeled, head, upstream, track] = line.split('\0');
@@ -399,7 +654,9 @@ export class GitService {
       if (ref.startsWith('refs/heads/')) {
         const ahead = Number(/ahead (\d+)/.exec(track)?.[1] || 0);
         const behind = Number(/behind (\d+)/.exec(track)?.[1] || 0);
-        result.local.push({ name: ref.slice(11), hash, current: head === '*', upstream: upstream || null, gone: track === 'gone', ahead, behind });
+        // Branche extraite dans une autre worktree : Git refuse d'y basculer ici, l'interface propose d'ouvrir celle-ci.
+        const elsewhere = worktrees.find((item) => item.branch === ref.slice(11) && !item.current);
+        result.local.push({ name: ref.slice(11), hash, current: head === '*', upstream: upstream || null, gone: track === 'gone', ahead, behind, worktree: elsewhere?.path ?? null });
       } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) {
         const name = ref.slice(13);
         // Un nom de remote peut contenir « / » : on retient le plus long remote configuré qui préfixe la référence.
@@ -420,6 +677,7 @@ export class GitService {
     this.#validateBranchName(name);
     const branches = await this.branches();
     if (!branches.some((branch) => branch.name === name)) throw new GitWorkbenchError('branch-not-found');
+    if ((await this.worktrees()).some((item) => item.branch === name && !item.current)) throw new GitWorkbenchError('branch-in-other-worktree');
     await runGit(this.repositoryPath, ['switch', name]);
     return this.status();
   }
@@ -681,7 +939,12 @@ export class GitService {
 
   // Pull explicite : fetch du dépôt distant de l'upstream, puis fast-forward seul. Si la branche a aussi des commits
   // absents de l'upstream (divergence), rien n'est intégré : l'écart revient pour proposer un merge ou un rebase.
-  async pull(expectedUpstream) {
+  // Il attend tout fetch en cours (même verrou) : un fetch d'arrière-plan ne tourne jamais en même temps.
+  pull(expectedUpstream) {
+    return this.#exclusiveSync(() => this.#pullNow(expectedUpstream));
+  }
+
+  async #pullNow(expectedUpstream) {
     await this.#ensureRepositoryPath();
     if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
     const read = (args) => runGit(this.repositoryPath, args).then((text) => text.trim(), () => '');
@@ -700,6 +963,8 @@ export class GitService {
     const recoveryRef = await this.#saveRecoveryRef('pull');
     try { await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-squash', target]); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef); }
+    // Succès annoncé seulement si la branche pointe bien sur le commit de l'upstream récupéré.
+    if (await read(['rev-parse', 'HEAD']) !== target) throw new GitWorkbenchError('pull-verification-failed', recoveryRef);
     return { upstream, ahead, behind, pulled: true, diverged: false, recoveryRef };
   }
 
@@ -723,12 +988,120 @@ export class GitService {
   }
 
   // Contenu d'un blob (`HEAD:chemin`, `:chemin` pour l'index, `:2:chemin` pour un côté de conflit) ; null s'il n'existe pas.
-  async #blob(spec) {
+  async #blob(spec, encoding = 'utf8') {
     if (spec.includes('\0')) throw new GitWorkbenchError('invalid-path');
-    return runGit(this.repositoryPath, ['cat-file', 'blob', spec]).catch((error) => {
+    return runGit(this.repositoryPath, ['cat-file', 'blob', spec], { encoding }).catch((error) => {
       if (error.code === 'git-output-too-large') throw error;
       return null;
     });
+  }
+
+  // Les deux côtés du diff relus en octets exacts (latin1) : index → fichier pour indexer, HEAD → index pour désindexer.
+  // Le fichier de travail est lu tel que `git add` le verrait (filtres et conversion des fins de ligne appliqués).
+  async #partialSides(filePath, entry, stage) {
+    const [indexEntry, headEntry] = await Promise.all([
+      this.#indexEntry(filePath),
+      stage ? null : runGit(this.repositoryPath, ['ls-tree', '-z', 'HEAD', '--', filePath]).then((raw) => {
+        const [info, name] = raw.split('\0')[0].split('\t');
+        return name === filePath ? { mode: info.split(' ')[0] } : null;
+      }, () => null),
+    ]);
+    const indexContent = indexEntry ? (indexEntry.sha === EMPTY_BLOB ? '' : await this.#blob(indexEntry.sha, 'latin1')) : null;
+    if (!stage) {
+      const left = headEntry ? await this.#blob(`HEAD:${filePath}`, 'latin1') : null;
+      return { left, right: indexContent, displayedRight: indexContent, fileMode: indexEntry?.mode ?? headEntry?.mode };
+    }
+    if (entry.worktreeStatus === 'D') return { left: indexContent, right: null, displayedRight: null, fileMode: indexEntry?.mode };
+    const absolute = await this.#workingPath(filePath);
+    // lstat : un lien symbolique n'est pas un fichier texte à découper en lignes.
+    const info = await lstat(absolute);
+    if (!info.isFile() || info.size > MAX_EDITABLE) throw new GitWorkbenchError('partial-staging-unsupported');
+    const raw = (await readFile(absolute)).toString('latin1');
+    const sha = (await runGit(this.repositoryPath, ['hash-object', '-w', '--', filePath])).trim();
+    const right = await this.#blob(sha, 'latin1');
+    // Un filtre qui change autre chose que les fins de ligne (LFS, ident…) : les lignes affichées ne sont pas celles
+    // que Git indexerait.
+    if (right === null || splitLines(raw).texts.join('\n') !== splitLines(right).texts.join('\n')) throw new GitWorkbenchError('partial-staging-unsupported');
+    const executable = process.platform !== 'win32' && (info.mode & 0o111) !== 0;
+    return { left: indexContent, right, displayedRight: raw, fileMode: indexEntry?.mode ?? (executable ? '100755' : '100644') };
+  }
+
+  async #applyLines(filePath, request, mode) {
+    const entry = await this.#statusEntry(filePath);
+    if (entry.conflicted || entry.originalPath) throw new GitWorkbenchError('partial-staging-unsupported');
+    if (typeof request?.original !== 'string' || typeof request?.modified !== 'string') throw new GitWorkbenchError('invalid-content');
+    const stage = mode === 'stage';
+    const { left, right, displayedRight, fileMode } = await this.#partialSides(filePath, entry, stage);
+    if (isBinary(left) || isBinary(right) || (fileMode !== '100644' && fileMode !== '100755')) throw new GitWorkbenchError('partial-staging-unsupported');
+    // Le diff affiché doit être exactement celui du disque : sinon les numéros de ligne choisis ne désignent plus rien.
+    const decode = (text) => Buffer.from(text ?? '', 'latin1').toString('utf8');
+    if (decode(left) !== request.original || decode(displayedRight) !== request.modified) throw new GitWorkbenchError('diff-outdated');
+    let plan;
+    try {
+      plan = buildPartialPatch({ path: filePath, mode, left, right, changes: request.changes, selection: request.selection, fileMode });
+    } catch (error) {
+      if (error instanceof PartialStagingError) throw new GitWorkbenchError(error.code);
+      throw error;
+    }
+
+    const gitDirectory = await this.#gitDirectory();
+    const indexPath = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-path', 'index'])).trim());
+    const before = await this.#stagedRecords();
+    const backup = await readFile(indexPath).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+    const patchPath = path.join(gitDirectory, `git-workbench-partial-${randomUUID()}.patch`);
+    await writeFile(patchPath, Buffer.from(plan.patch, 'latin1'), { mode: 0o600 });
+    try {
+      // --whitespace=nowarn : une configuration apply.whitespace=fix ne doit pas retoucher les lignes choisies.
+      // core.longpaths : sous Windows, le chemin du patch dans un dépôt profond dépasse vite 260 caractères.
+      await runGit(this.repositoryPath, ['-c', 'core.longpaths=true', 'apply', '--cached', '--whitespace=nowarn', ...(stage ? [] : ['--reverse']), patchPath]);
+    } catch {
+      // `git apply` est atomique : en cas de refus, l'index n'a pas été touché.
+      throw new GitWorkbenchError('partial-apply-failed');
+    } finally {
+      await rm(patchPath, { force: true });
+    }
+    if (await this.#indexMatches(filePath, before, { ...plan, fileMode })) return this.status();
+    try {
+      if (backup === null) await rm(indexPath, { force: true });
+      else {
+        const temporary = `${indexPath}.git-workbench-restore`;
+        await writeFile(temporary, backup);
+        await rename(temporary, indexPath);
+      }
+    } catch {
+      throw new GitWorkbenchError('partial-restore-failed');
+    }
+    throw new GitWorkbenchError('partial-verification-failed');
+  }
+
+  async #indexEntry(filePath) {
+    const raw = await runGit(this.repositoryPath, ['ls-files', '--stage', '-z', '--', `:(literal)${filePath}`]);
+    for (const record of raw.split('\0')) {
+      const [info, name] = record.split('\t');
+      if (name === filePath) { const [mode, sha] = info.split(' '); return { mode, sha }; }
+    }
+    return null;
+  }
+
+  // Ce que `git diff --cached` rapporte pour chaque chemin (modes et objets avant/après, statut).
+  async #stagedRecords() {
+    const fields = (await runGit(this.repositoryPath, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff'])).split('\0');
+    const records = new Map();
+    for (let i = 0; i + 1 < fields.length; i += 2) records.set(fields[i + 1], fields[i].replace(/^\n/, ''));
+    return records;
+  }
+
+  // Garde de fiabilité : seuls le chemin visé et son contenu attendu ont changé dans l'index.
+  async #indexMatches(filePath, before, expected) {
+    const after = await this.#stagedRecords();
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+      if (key !== filePath && before.get(key) !== after.get(key)) return false;
+    }
+    const entry = await this.#indexEntry(filePath);
+    if (!expected.exists) return entry === null;
+    if (!entry || entry.mode !== expected.fileMode) return false;
+    const content = entry.sha === EMPTY_BLOB ? '' : await this.#blob(entry.sha, 'latin1');
+    return content === expected.content;
   }
 
   #versions(original, modified, { editable }) {

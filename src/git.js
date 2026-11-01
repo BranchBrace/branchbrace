@@ -26,9 +26,9 @@ const DANGEROUS_GIT_ENV_VARS = [
   'GIT_CEILING_DIRECTORIES',
 ];
 
-function sanitizedEnv(extra = {}) {
+function sanitizedEnv(extra = {}, unset = []) {
   const env = { ...process.env, ...extra };
-  for (const name of DANGEROUS_GIT_ENV_VARS) delete env[name];
+  for (const name of [...DANGEROUS_GIT_ENV_VARS, ...unset]) delete env[name];
   return env;
 }
 
@@ -53,7 +53,7 @@ function runGit(cwd, args, options = {}) {
       cwd,
       shell: false,
       windowsHide: true,
-      env: sanitizedEnv(options.env),
+      env: sanitizedEnv(options.env, options.unsetEnv),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];
@@ -92,7 +92,10 @@ function runGit(cwd, args, options = {}) {
   });
 }
 
-function classifyFailure(args, stderr) {
+function classifyFailure(allArgs, stderr) {
+  // Les options `-c clé=valeur` placées avant la sous-commande ne comptent pas pour la reconnaître.
+  let args = allArgs;
+  while (args[0] === '-c') args = args.slice(2);
   const text = stderr.toLowerCase();
   // Une branche ne peut être extraite que dans une seule worktree (« is already used by worktree at », ou
   // « is already checked out at » avant Git 2.42).
@@ -104,8 +107,7 @@ function classifyFailure(args, stderr) {
   if (args[0] === 'push' && (text.includes('rejected') || text.includes('non-fast-forward'))) return 'push-rejected';
   if (args[0] === 'push') return 'push-indeterminate';
   if (args[0] === 'fetch') return 'fetch-failed';
-  if (text.includes('not a git repository')) return 'not-a-repository';
-  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
+  if (text.includes('not a git repository')) return 'not-a-repository';  if (text.includes('local changes') || text.includes('would be overwritten')) return 'unsafe-working-tree';
   return 'git-operation-failed';
 }
 
@@ -121,14 +123,49 @@ export class GitWorkbenchError extends Error {
 
 // En-tête de `status --branch` : « ## main...origin/main [ahead 1] », « ## main », « ## HEAD (no branch) »
 // ou « ## No commits yet on main ». Un upstream « [gone] » (branche distante supprimée) compte comme absent.
+// L'avance et le retard sur l'upstream (↑ ahead, ↓ behind) se lisent dans le même en-tête.
 export function parseBranchHeader(header) {
   const text = header.slice(3);
-  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null };
+  if (text.startsWith('HEAD (no branch)')) return { branch: '(HEAD détachée)', upstream: null, ahead: 0, behind: 0 };
   const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text);
-  if (unborn) return { branch: unborn[1], upstream: null };
+  if (unborn) return { branch: unborn[1], upstream: null, ahead: 0, behind: 0 };
   const [names, tracking = ''] = text.split(' [');
   const [branch, upstream] = names.split('...');
-  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null };
+  const ahead = Number(/ahead (\d+)/.exec(tracking)?.[1] || 0);
+  const behind = Number(/behind (\d+)/.exec(tracking)?.[1] || 0);
+  return { branch, upstream: upstream && !tracking.startsWith('gone') ? upstream : null, ahead, behind };
+}
+
+// Options d'un fetch lancé sans action de l'utilisateur. GIT_TERMINAL_PROMPT=0 ne coupe que le terminal : un
+// `core.askPass` vide l'emporte sur tout programme d'invite configuré (et sur SSH_ASKPASS), et
+// `credential.interactive=false` interdit à Git Credential Manager d'ouvrir une fenêtre.
+export const NON_INTERACTIVE_CONFIG = ['-c', 'core.askPass=', '-c', 'credential.interactive=false'];
+// Hérités du processus, ces programmes d'invite ouvriraient une fenêtre d'identifiants à chaque fetch automatique.
+export const INTERACTIVE_ENV_VARS = ['GIT_ASKPASS', 'SSH_ASKPASS'];
+
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+
+// Nom du programme d'une commande SSH (« "C:\PuTTY\plink.exe" -v » → « plink »), comme Git le lit pour deviner le client.
+function sshProgramName(command) {
+  const match = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(command);
+  const program = match ? match[1] ?? match[2] ?? match[3] : '';
+  return path.posix.basename(program.replaceAll('\\', '/')).toLowerCase().replace(/\.exe$/, '');
+}
+
+// Environnement du fetch d'arrière-plan : aucune invite d'identifiants ne doit bloquer ni ouvrir de fenêtre. Un helper
+// qui a déjà le secret le fournit toujours. La commande SSH effective est calculée avec la priorité de Git
+// (GIT_SSH_COMMAND, puis core.sshCommand, puis GIT_SSH) puis rendue non interactive selon le client : BatchMode pour
+// OpenSSH, `-batch` pour plink/PuTTY (TortoisePlink le reçoit déjà de Git). Un client inconnu n'est pas modifié.
+export function nonInteractiveEnv({ sshCommand = null, sshVariant = null } = {}, environment = process.env) {
+  const env = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never' };
+  const command = environment.GIT_SSH_COMMAND || sshCommand || (environment.GIT_SSH ? shellQuote(environment.GIT_SSH) : 'ssh');
+  const name = sshProgramName(command);
+  const variant = (environment.GIT_SSH_VARIANT || sshVariant || '').toLowerCase()
+    || ({ ssh: 'ssh', plink: 'plink', tortoiseplink: 'tortoiseplink' })[name] || 'auto';
+  if (variant === 'plink' || variant === 'putty') Object.assign(env, { GIT_SSH_COMMAND: `${command} -batch`, GIT_SSH_VARIANT: variant });
+  else if (variant === 'tortoiseplink') Object.assign(env, { GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: variant });
+  else if (variant === 'ssh') env.GIT_SSH_COMMAND = `${command} -o BatchMode=yes`;
+  return env;
 }
 
 function parseStatus(raw) {
@@ -270,9 +307,39 @@ export class GitService {
 
   // Récupère les branches de tous les dépôts distants. `--prune` retire les copies locales des branches supprimées
   // côté serveur : seules des références de suivi changent, jamais une branche locale ni l'arbre de travail.
-  async fetch() {
-    await this.#ensureRepositoryPath();
-    await runGit(this.repositoryPath, ['fetch', '--all', '--prune', '--no-recurse-submodules']);
+  // En arrière-plan (`background`), le fetch est sauté si un fetch ou un pull est en cours ou attend son tour, ou si
+  // une opération Git (rebase, merge, cherry-pick) attend d'être terminée, et ne peut jamais demander d'identifiants.
+  // Le test « en vol » et la prise du verrou sont synchrones : aucun appel ne peut se glisser entre les deux.
+  fetch({ background = false } = {}) {
+    if (background && this.#syncPending) return Promise.resolve({ skipped: 'in-flight' });
+    return this.#exclusiveSync(async () => {
+      await this.#ensureRepositoryPath();
+      if (background) {
+        const operation = await this.operation();
+        if (operation) return { skipped: 'operation', operation };
+      }
+      const args = ['fetch', '--all', '--prune', '--no-recurse-submodules'];
+      if (!background) await runGit(this.repositoryPath, args);
+      else await runGit(this.repositoryPath, [...NON_INTERACTIVE_CONFIG, ...args], { env: nonInteractiveEnv(await this.#sshSettings()), unsetEnv: INTERACTIVE_ENV_VARS });
+      return { skipped: null };
+    });
+  }
+
+  // Fetch et pull écrivent les mêmes références de suivi : ils passent un par un dans l'ordre d'arrivée (deux fetch
+  // simultanés échoueraient sur « cannot lock ref »). `#syncPending` compte les tâches en cours ou en attente.
+  #syncQueue = Promise.resolve();
+  #syncPending = 0;
+  #exclusiveSync(task) {
+    this.#syncPending += 1;
+    const run = this.#syncQueue.then(task).finally(() => { this.#syncPending -= 1; });
+    this.#syncQueue = run.catch(() => {});
+    return run;
+  }
+
+  async #sshSettings() {
+    const read = (key) => runGit(this.repositoryPath, ['config', '--get', key], { acceptExitCodes: [1] }).then((value) => value.trim() || null);
+    const [sshCommand, sshVariant] = await Promise.all([read('core.sshCommand'), read('ssh.variant')]);
+    return { sshCommand, sshVariant };
   }
 
   // Tout ce qu'affiche l'interface pour un dépôt, en trois lancements de git parallèles.
@@ -860,7 +927,12 @@ export class GitService {
 
   // Pull explicite : fetch du dépôt distant de l'upstream, puis fast-forward seul. Si la branche a aussi des commits
   // absents de l'upstream (divergence), rien n'est intégré : l'écart revient pour proposer un merge ou un rebase.
-  async pull(expectedUpstream) {
+  // Il attend tout fetch en cours (même verrou) : un fetch d'arrière-plan ne tourne jamais en même temps.
+  pull(expectedUpstream) {
+    return this.#exclusiveSync(() => this.#pullNow(expectedUpstream));
+  }
+
+  async #pullNow(expectedUpstream) {
     await this.#ensureRepositoryPath();
     if (await this.operation()) throw new GitWorkbenchError('operation-in-progress');
     const read = (args) => runGit(this.repositoryPath, args).then((text) => text.trim(), () => '');
@@ -879,6 +951,8 @@ export class GitService {
     const recoveryRef = await this.#saveRecoveryRef('pull');
     try { await runGit(this.repositoryPath, ['merge', '--ff-only', '--no-squash', target]); }
     catch (error) { throw new GitWorkbenchError(error.code || 'git-operation-failed', recoveryRef); }
+    // Succès annoncé seulement si la branche pointe bien sur le commit de l'upstream récupéré.
+    if (await read(['rev-parse', 'HEAD']) !== target) throw new GitWorkbenchError('pull-verification-failed', recoveryRef);
     return { upstream, ahead, behind, pulled: true, diverged: false, recoveryRef };
   }
 

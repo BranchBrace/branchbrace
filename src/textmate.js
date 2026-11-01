@@ -1,10 +1,12 @@
-// Modules CommonJS : importés par défaut, pour que la page (Vite) et les tests (Node) les chargent de la même façon.
-import textmate from 'vscode-textmate';
-import oniguruma from 'vscode-oniguruma';
+// Modules CommonJS marqués `__esModule` sans export par défaut : l'import par défaut vaut `module.exports` sous Node et au
+// build, mais `undefined` sous Vite en développement. L'espace de noms se ramène partout à `module.exports` : en `default`
+// sous Node et au build, ou lui-même sous Vite en développement.
+import * as textmateModule from 'vscode-textmate';
+import * as onigurumaModule from 'vscode-oniguruma';
 import { injectionsFor, pickToken, resolveLanguage } from './grammar-catalog.js';
 
-const { INITIAL, Registry, parseRawGrammar } = textmate;
-const { createOnigScanner, createOnigString, loadWASM } = oniguruma;
+const { INITIAL, Registry, parseRawGrammar } = textmateModule.default ?? textmateModule;
+const { createOnigScanner, createOnigString, loadWASM } = onigurumaModule.default ?? onigurumaModule;
 
 // Coloration par les grammaires TextMate des extensions VS Code, branchée sur Monaco. Chaque langage couvert devient un
 // langage Monaco `tm.<id>` dont la grammaire n'est chargée (par IPC) qu'à la première utilisation. Le moteur d'expressions

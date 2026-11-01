@@ -164,7 +164,7 @@ function parseDecorations(raw) {
 // URL web d'un dépôt distant (GitHub, GitLab…) déduite de son URL Git, sans jamais renvoyer d'identifiants : un
 // éventuel « user:token@ » d'une URL HTTPS est retiré. Seules les formes https, ssh et scp (git@hôte:chemin) sont lues.
 export function remoteWebUrl(url) {
-  if (typeof url !== 'string' || !url) return null;
+  if (typeof url !== 'string' || !url || /^[a-z]:[\\/]/i.test(url)) return null;
   let host;
   let pathname;
   const scp = /^(?:[^@/\s]+@)?([a-z0-9.-]+):(?!\/\/)([^\s]+)$/i.exec(url);

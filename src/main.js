@@ -536,7 +536,9 @@ const ui = {
       return node;
     };
     const actions = [];
-    if (file) actions.push(button(staged ? 'Désindexer' : 'Indexer', staged ? 'Retirer ce fichier de l’index' : 'Ajouter ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
+    if (file) actions.push(button(staged ? 'Désindexer le fichier' : 'Indexer le fichier', staged ? 'Retirer tout ce fichier de l’index' : 'Ajouter tout ce fichier à l’index', () => this.toggleStage(file), 'button compact stage-all'));
+    // Blocs et lignes (A3) : pas pour un fichier renommé ni en conflit, que seul le fichier entier peut indexer.
+    const lines = file && !file.originalPath ? { verb: staged ? 'Désindexer' : 'Indexer', apply: (request) => this.applyLines(filePath, staged, request) } : null;
     if (file && file.worktreeStatus !== 'D') {
       actions.push(button('Éditeur', 'Ouvrir le fichier dans l’éditeur intégré', () => this.showEditor(filePath)));
       actions.push(button('Dossier', 'Afficher le fichier dans l’explorateur', () => this.invoke(() => window.workbench.showFile(ui.root, filePath))));
@@ -548,12 +550,21 @@ const ui = {
       this.editor?.reloadClean(filePath);
       this.message(`${filePath} enregistré.`);
       return true;
-    });
+    }, lines);
   },
-  async renderDiff(filePath, data, title, actions, onSave) {
+  async renderDiff(filePath, data, title, actions, onSave, lines = null) {
     const { showDiff } = await views();
     this.setView('diff', title);
-    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave });
+    showDiff($('#diff-view'), $('#view-tools'), { path: filePath, data, actions, onSave, lines });
+  },
+  // Indexe ou désindexe un bloc ou des lignes, puis recharge le diff (même en cas de refus : il a pu changer sur disque).
+  // Quand il ne reste rien de ce côté, la vue passe à l'autre (non indexé → indexé ou l'inverse).
+  async applyLines(filePath, staged, request) {
+    const status = await this.applyStatus(() => (staged ? window.workbench.unstageLines(ui.root, filePath, request) : window.workbench.stageLines(ui.root, filePath, request)));
+    if (status) this.message(staged ? `Lignes retirées de l’index : ${filePath}.` : `Lignes ajoutées à l’index : ${filePath}.`);
+    const updated = this.files.find((item) => item.path === filePath);
+    if (!updated || this.selected !== filePath || this.view !== 'diff') return;
+    await this.showDiff(filePath, (staged ? updated.staged : updated.unstaged) ? staged : !staged);
   },
   async copy(text, label) {
     try { await navigator.clipboard.writeText(text); this.message(`${label} : ${text}.`); }

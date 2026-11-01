@@ -1,3 +1,16 @@
+# [1.1.0-rc.6](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.5...v1.1.0-rc.6) (2026-11-01)
+
+
+### Bug Fixes
+
+* **diff:** afficher les CodeLens « Indexer ce bloc » dans l'éditeur de diff ([3fa6e1d](https://github.com/monnierant/git-workbench/commit/3fa6e1d0168e80f44173341e2e3172cccaa7255a))
+* **ipc:** refermer le gestionnaire du découpage de commit ([c2aaf64](https://github.com/monnierant/git-workbench/commit/c2aaf642d81ceefd8a0e5c86abad81b2ebf2fde7))
+
+
+### Features
+
+* **staging:** indexation par bloc et découpage d'un commit ([d32a5c1](https://github.com/monnierant/git-workbench/commit/d32a5c197721bcef38d2e84d0660ea40b5a40173))
+
 # [1.1.0-rc.5](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.4...v1.1.0-rc.5) (2026-11-01)
 
 

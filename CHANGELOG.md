@@ -1,3 +1,10 @@
+# [1.1.0-rc.2](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.1...v1.1.0-rc.2) (2026-11-01)
+
+
+### Features
+
+* merge local et pull en fast-forward seul ([983f8f1](https://github.com/monnierant/git-workbench/commit/983f8f11abd3f9839b4bf56bf2f23881f0ba3b69))
+
 # [1.1.0-rc.1](https://github.com/monnierant/git-workbench/compare/v1.0.0...v1.1.0-rc.1) (2026-11-01)
 
 

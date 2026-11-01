@@ -62,4 +62,9 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   installUpdate: () => call('updates:install'),
   onUpdateProgress: (handler) => ipcRenderer.on('updates:progress', (_event, { received, total }) => handler({ received, total })),
   remoteIcon: (root, remote) => call('shell:remote-icon', { root, remote }),
+  grammarCatalog: () => call('grammars:catalog'),
+  readGrammar: (scopeName) => call('grammars:read', { scopeName }),
+  onigWasm: () => call('grammars:onig'),
+  importExtension: () => call('extensions:import'),
+  removeExtension: (id) => call('extensions:remove', { id }),
 }));

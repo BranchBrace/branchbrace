@@ -1,3 +1,10 @@
+# [1.1.0-rc.10](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.9...v1.1.0-rc.10) (2026-11-01)
+
+
+### Bug Fixes
+
+* **dev:** charger vscode-textmate et vscode-oniguruma sous Vite en développement ([6eefdbd](https://github.com/BranchBrace/branchbrace/commit/6eefdbd1c5fef7492ea32798b2ff99a7e4263933))
+
 # [1.1.0-rc.9](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.8...v1.1.0-rc.9) (2026-11-01)
 
 

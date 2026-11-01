@@ -39,7 +39,7 @@ No hosted service, account, or telemetry by default. Inspection, history, diffs,
 
 ## Explicitly out of scope for v1
 
-Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation and hosting-provider APIs; cloud accounts or collaboration; AI, extensions, automatic hooks; force-push, reset, discard; stash management; submodules/worktrees; server/CI runtime; auto-update or package publication.
+Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation and hosting-provider APIs; cloud accounts or collaboration; AI, extensions, automatic hooks; force-push, reset, discard; stash management; submodules; server/CI runtime; auto-update or package publication.
 
 ## Added after v1 (explicit user actions only)
 
@@ -54,6 +54,7 @@ Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation a
 - B9. Interactive rebase plan editor: full-window, one colour and icon per action, rows reordered by dragging. Starting it from the validated plan needs no second confirmation; the recovery ref remains.
 - B10. Application menu in an icon left of the tabs (no native menu bar); informational messages are short toasts, confirmations stay for push, branch rewrite, abort, skip and amend of a pushed commit.
 - B11. Rename a local branch from its context menu: the name is validated with `git check-ref-format --branch` and applied with `git branch -m` (never `-M`), so a name already taken is refused and no branch is replaced; the upstream configuration follows. Renaming the tracked remote branch too is a separate, unchecked-by-default option that asks for confirmation: it is refused before any change unless the remote branch points at the local commit and the new name is free remotely, then pushes the new name (no force-push, verified with `ls-remote`), tracks it, and deletes the old remote name only with a lease on that exact commit, so no remote commit can be lost (A12/A13).
+- B12. Worktrees: a WORKTREES section of the branch panel lists `git worktree list --porcelain` (folder, branch or detached HEAD, main, locked, missing/prunable, and the current one). A worktree is created from a free existing branch or a new branch, in a folder chosen in the native dialog (an empty or new folder; a non-empty one gets a sub-folder named after the branch); it opens in its own tab like any repository, with its own status and in-progress operation. Removal asks for confirmation, uses `git worktree remove` without `--force` (Git refuses when uncommitted or untracked files would be lost), keeps the branch, then runs `git worktree prune`; the main, current and locked worktrees cannot be removed. A branch checked out in another worktree is marked as such and switching to it offers to open that worktree instead of failing.
 
 ## Architecture and delivery decisions
 

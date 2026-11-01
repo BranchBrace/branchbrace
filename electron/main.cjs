@@ -3,7 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { GitService, GitWorkbenchError } = require('../src/git.js');
+const { GitService, GitWorkbenchError, samePath } = require('../src/git.js');
 const updates = require('../src/updates.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
@@ -288,6 +288,45 @@ Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivr
     }
     return service(root).renameBranch(name, newName, { remote: remote === true });
   });
+  // Worktrees : le dossier d'une nouvelle worktree est choisi ici dans le dialogue natif, jamais reçu de la page. Un
+  // dossier non vide reçoit un sous-dossier au nom de la branche.
+  handle('repository:worktree:add', async (_event, { root, branch, newBranch }) => {
+    service(root);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: `Dossier de la worktree « ${branch} »`,
+      buttonLabel: 'Créer la worktree ici',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    let target = result.filePaths[0];
+    if (fs.existsSync(target) && fs.readdirSync(target).length) target = path.join(target, String(branch).replace(/[\\/:*?"<>|\s]+/g, '-'));
+    return service(root).addWorktree(target, { branch, newBranch: newBranch === true });
+  });
+  // Ouvre une worktree du dépôt dans un onglet : seules celles que Git liste pour ce dépôt sont acceptées.
+  handle('repository:worktree:open', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree || worktree.prunable || worktree.bare) throw new GitWorkbenchError('worktree-not-found');
+    const opened = [...repositories.keys()].find((key) => samePath(key, worktree.path));
+    if (opened) { writeSession(opened); return snapshot(opened); }
+    const candidate = new GitService(worktree.path);
+    const verified = await candidate.verifyRepository();
+    repositories.set(verified, candidate);
+    writeSession(verified);
+    return snapshot(verified);
+  });
+  handle('repository:worktree:remove', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree) throw new GitWorkbenchError('worktree-not-found');
+    if (!worktree.prunable && !await confirm('Supprimer la worktree ?', `Le dossier ${worktree.path} sera supprimé${worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : ''}.
+
+Git refusera s’il contient des changements non commités ou des fichiers non suivis : rien ne sera perdu.`)) return null;
+    const worktrees = await service(root).removeWorktree(worktree.path);
+    // Son onglet éventuel n'a plus de dépôt derrière lui.
+    for (const key of [...repositories.keys()]) if (samePath(key, worktree.path)) repositories.delete(key);
+    writeSession(root);
+    return { worktrees, tabs: [...repositories.keys()] };
+  });
+  handle('repository:worktree:prune', async (_event, { root }) => service(root).pruneWorktrees());
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));

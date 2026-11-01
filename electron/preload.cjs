@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   diff: (root, path, staged) => call('repository:diff', { root, path, staged }),
   stage: (root, path) => call('repository:stage', { root, path }),
   unstage: (root, path) => call('repository:unstage', { root, path }),
+  splitCommit: (root, hash) => call('repository:split', { root, hash }),
   stageLines: (root, path, request) => call('repository:stage-lines', { root, path, request }),
   unstageLines: (root, path, request) => call('repository:unstage-lines', { root, path, request }),
   stageAll: (root) => call('repository:stage-all', { root }),

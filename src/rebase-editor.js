@@ -1,20 +1,23 @@
 // Éditeur de rebase interactif : chaque commit de la branche (du plus ancien, en haut, au plus récent) reçoit une
 // action choisie dans un menu coloré, se déplace en glissant la ligne (ou Alt+↑/↓), et l'aperçu montre l'historique
-// obtenu avant de lancer quoi que ce soit. Raccourcis sur la ligne active : P garder, R reformuler, S fusionner,
-// F absorber, D écarter.
+// obtenu avant de lancer quoi que ce soit. Raccourcis sur la ligne active : P garder, R reformuler, C découper,
+// S fusionner, F absorber, D écarter.
 const ACTIONS = [
   { id: 'pick', label: 'Garder', key: 'P', hint: 'Garder le commit tel quel' },
   { id: 'reword', label: 'Reformuler', key: 'R', hint: 'Garder le commit en changeant son message' },
+  { id: 'split', label: 'Découper', key: 'C', hint: 'S’arrêter sur ce commit pour le recommitter en plusieurs morceaux' },
   { id: 'squash', label: 'Fusionner', key: 'S', hint: 'Fusionner dans le commit au-dessus, messages combinés' },
   { id: 'fixup', label: 'Absorber', key: 'F', hint: 'Fusionner dans le commit au-dessus en gardant son message à lui' },
   { id: 'drop', label: 'Écarter', key: 'D', hint: 'Retirer ce commit de la branche' },
 ];
 const ACTION = Object.fromEntries(ACTIONS.map((action) => [action.id, action]));
 const KEYS = Object.fromEntries(ACTIONS.map((action) => [action.key.toLowerCase(), action.id]));
-// Pictogrammes 16×16 tracés au trait : coche, crayon, double chevron (fusion), chevron sous une barre (absorption), croix.
+// Pictogrammes 16×16 tracés au trait : coche, crayon, ciseaux, double chevron (fusion), chevron sous une barre
+// (absorption), croix.
 const ICONS = {
   pick: '<path d="M3.5 8.5l3 3 6-7"/>',
   reword: '<path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M9 4.5l2.5 2.5"/>',
+  split: '<circle cx="4.5" cy="11.5" r="2"/><circle cx="11.5" cy="11.5" r="2"/><path d="M6 10L12 3"/><path d="M10 10L4 3"/>',
   squash: '<path d="M4 8.5l4-4 4 4"/><path d="M4 12.5l4-4 4 4"/>',
   fixup: '<path d="M3 3h10"/><path d="M4.5 10.5L8 7l3.5 3.5"/><path d="M8 7v6.5"/>',
   drop: '<path d="M4.5 4.5l7 7"/><path d="M11.5 4.5l-7 7"/>',
@@ -228,6 +231,7 @@ export function editRebasePlan({ base, branch, commits }) {
         row.append(element('span', 'rebase-dot'), element('span', 'rebase-result-subject', message.split('\n')[0] || '(message vide)'));
         if (group.members.length) row.append(element('span', 'rebase-result-badge', `+${group.members.length}`));
         if (group.head.action === 'reword' && !group.members.length) row.append(element('span', 'rebase-result-badge reword', 'reformulé'));
+        if (group.head.action === 'split') row.append(element('span', 'rebase-result-badge split', 'à découper'));
         history.append(row);
       }
       history.append(Object.assign(element('li', 'rebase-result-row base'), { textContent: `${base} (base)` }));

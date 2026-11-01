@@ -459,3 +459,39 @@ test('an inherited GIT_DIR/GIT_WORK_TREE does not redirect operations to another
     if (savedWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedWorkTree;
   }
 });
+
+test('splitting a commit replays it as several commits and keeps the rest of the branch', async (t) => {
+  const { repo, service } = await fixture(t);
+  await writeFile(path.join(repo, 'a.txt'), 'a\n');
+  await writeFile(path.join(repo, 'b.txt'), 'b\n');
+  git(repo, 'add', '.'); git(repo, 'commit', '--quiet', '-m', 'a and b');
+  const target = git(repo, 'rev-parse', 'HEAD');
+  await writeFile(path.join(repo, 'c.txt'), 'c\n');
+  git(repo, 'add', 'c.txt'); git(repo, 'commit', '--quiet', '-m', 'c');
+  const result = await service.splitCommit(target);
+  assert.match(result.recoveryRef, /^refs\/git-workbench\/recovery\/interactive-rebase-/);
+  assert.equal(result.status.operation, 'rebase');
+  assert.equal(result.status.split.hash, target);
+  assert.equal(result.status.split.message, 'a and b');
+  assert.equal(result.status.split.ready, true);
+  assert.deepEqual(result.status.files.map((file) => file.path).sort(), ['a.txt', 'b.txt']);
+  await assert.rejects(service.continueOperation(), (error) => error.code === 'split-changes-remaining');
+  await service.stage('a.txt'); await service.commit('a');
+  await service.stage('b.txt'); await service.commit('b');
+  const done = await service.continueOperation();
+  assert.equal(done.status.operation, null);
+  assert.equal(git(repo, 'log', '--format=%s').split('\n').join(','), 'c,b,a,initial');
+  assert.equal((await service.status()).files.length, 0);
+});
+
+test('splitting refuses root commits and commits outside the current branch', async (t) => {
+  const { repo, service } = await fixture(t);
+  const root = git(repo, 'rev-parse', 'HEAD');
+  await assert.rejects(service.splitCommit(root), (error) => error.code === 'split-unsupported');
+  git(repo, 'checkout', '--quiet', '-b', 'other');
+  await writeFile(path.join(repo, 'o.txt'), 'o\n');
+  git(repo, 'add', 'o.txt'); git(repo, 'commit', '--quiet', '-m', 'other');
+  const other = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'checkout', '--quiet', 'main');
+  await assert.rejects(service.splitCommit(other), (error) => error.code === 'split-not-on-branch');
+});

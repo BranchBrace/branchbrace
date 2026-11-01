@@ -1,6 +1,7 @@
 // Panneau de gauche façon GitKraken : sections LOCAL / DISTANT / TAGS repliables et filtrables. Chaque branche locale
 // dit où elle en est par rapport à sa distante (à jour, en avance/retard, jamais poussée, distante supprimée) ; les
 // branches distantes sont regroupées par dépôt (GitHub, GitLab…) et signalent celles qui n'existent pas en local.
+// La section WORKTREES liste les dossiers de travail du dépôt (`git worktree list`).
 import { refIcon } from './ref-icons.js';
 
 const collapsed = new Set();
@@ -20,7 +21,8 @@ function element(tag, className, text) {
   return node;
 }
 
-const providerName = (remote) => PROVIDERS[remote?.provider] || remote?.host || 'distant';
+const folderName = (folder) => folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+const providerName =(remote) => PROVIDERS[remote?.provider] || remote?.host || 'distant';
 
 // Logo de l'hébergeur d'un dépôt distant ; à défaut, le nuage « distant » jusqu'à l'arrivée de sa favicon (une
 // demande par hôte, gardée en mémoire : les rendus suivants l'affichent avant de peindre).
@@ -87,7 +89,7 @@ function row(kind, ref, label, { selectedHash, onSelect, onContextMenu }) {
 }
 
 export function renderRefs(container, refs, handlers) {
-  const { filter, onActivate, onCheckoutRemote, onOpenRemote, onRemoteMenu, loadRemoteIcon } = handlers;
+  const { filter, onActivate, onCheckoutRemote, onOpenRemote, onRemoteMenu, onOpenWorktree, onWorktreeMenu, loadRemoteIcon } = handlers;
   const needle = filter.trim().toLowerCase();
   const matches = (name) => !needle || name.toLowerCase().includes(needle);
   container.replaceChildren();
@@ -116,10 +118,11 @@ export function renderRefs(container, refs, handlers) {
     for (const ref of locals) {
       const item = row('local', ref, ref.name, handlers);
       const track = element('span', 'ref-track');
+      if (ref.worktree) track.append(pill('worktree', null, `⧉ ${folderName(ref.worktree)}`, `Extraite dans la worktree ${ref.worktree} : double-clic pour l’ouvrir`));
       track.append(...localPills(ref, refs));
       item.append(track);
-      item.title = `${ref.name}${ref.upstream ? ` → suit ${ref.upstream}` : ' (sans distante)'}${ref.current ? '' : ' — double-clic pour basculer'}`;
-      item.addEventListener('dblclick', () => { if (!ref.current) onActivate(ref.name); });
+      item.title = `${ref.name}${ref.upstream ? ` → suit ${ref.upstream}` : ' (sans distante)'}${ref.current ? '' : ref.worktree ? ` — extraite dans ${ref.worktree}, double-clic pour l’ouvrir` : ' — double-clic pour basculer'}`;
+      item.addEventListener('dblclick', () => { if (ref.worktree) onOpenWorktree(ref.worktree); else if (!ref.current) onActivate(ref.name); });
       list.append(item);
     }
   });
@@ -152,6 +155,28 @@ export function renderRefs(container, refs, handlers) {
         item.addEventListener('dblclick', () => { if (ref.trackedBy) onActivate(ref.trackedBy); else onCheckoutRemote(ref.name); });
         list.append(item);
       }
+    }
+  });
+
+  // Worktrees : dossiers de travail du même dépôt, chacun sur sa branche. Double-clic pour en ouvrir une en onglet.
+  const worktrees = (refs.worktrees || []).filter((item) => !item.bare && (matches(item.path) || matches(item.branch || '')));
+  section(container, 'worktrees', 'WORKTREES', document.createTextNode('⧉'), worktrees.length, needle, (list) => {
+    for (const worktree of worktrees) {
+      const item = element('div', `ref-item worktree-item${worktree.current ? ' current' : ''}`);
+      item.tabIndex = 0;
+      item.append(element('span', 'ref-marker', worktree.current ? '✓' : ''), element('span', 'ref-name', folderName(worktree.path)));
+      const track = element('span', 'ref-track');
+      track.append(worktree.branch ? pill('tracked', 'local', worktree.branch, `Branche extraite dans ${worktree.path}`) : pill('gone', null, 'HEAD détachée', `HEAD détachée sur ${worktree.head?.slice(0, 12) || '?'}`));
+      if (worktree.main) track.append(pill('synced', null, 'principale', 'Worktree principale du dépôt'));
+      if (worktree.locked) track.append(pill('local-only', null, 'verrouillée', typeof worktree.locked === 'string' ? `Verrouillée : ${worktree.locked}` : 'Verrouillée (git worktree lock)'));
+      if (worktree.prunable) track.append(pill('gone', null, 'introuvable', typeof worktree.prunable === 'string' ? worktree.prunable : 'Dossier introuvable : peut être oubliée (prune)'));
+      item.append(track);
+      item.title = `${worktree.path}${worktree.current ? ' (onglet courant)' : worktree.prunable ? '' : ' — double-clic pour l’ouvrir dans un onglet'}`;
+      const open = () => { if (!worktree.current && !worktree.prunable) onOpenWorktree(worktree.path); };
+      item.addEventListener('dblclick', open);
+      item.addEventListener('keydown', (event) => { if (event.key === 'Enter') open(); });
+      item.addEventListener('contextmenu', (event) => { event.preventDefault(); onWorktreeMenu(worktree, event.clientX, event.clientY); });
+      list.append(item);
     }
   });
 

@@ -198,3 +198,12 @@ dialog h2{font-size:16px;margin-top:0}
 
 .dialog-message{white-space:pre-wrap;color:#c3dfdc;line-height:1.6;font-size:13px;max-height:55vh;overflow:auto;margin:0}
 dialog .button.secondary:focus-visible,dialog .button.primary:focus-visible{outline:2px solid #eee98a;outline-offset:2px}
+
+/* Avance/retard de la branche courante sur son upstream, et indicateur discret d'échec du fetch automatique. */
+.branch-line{display:flex;align-items:baseline;gap:8px;min-width:0;max-width:100%}
+.sync-state{font:12px var(--mono);color:#8fb3b8;white-space:nowrap}
+.sync-state .behind{color:var(--accent);font-weight:700}
+.sync-state.diverged{color:#f0b46a}
+.tool-button.sync-error .tool-icon{color:#f0b46a}
+.tool-button.sync-error::after{content:'';position:absolute;top:4px;right:10px;width:6px;height:6px;border-radius:50%;background:#f0b46a}
+#fetch-button{position:relative}

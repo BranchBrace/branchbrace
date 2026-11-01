@@ -5,6 +5,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { GitService, GitWorkbenchError, samePath } = require('../src/git.js');
 const updates = require('../src/updates.js');
+const extensions = require('../src/extensions.js');
+const syncSettings = require('../src/sync-settings.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
 let mainWindow;
@@ -12,9 +14,20 @@ const repositories = new Map();
 const favicons = new Map();
 const sessionFile = () => path.join(app.getPath('userData'), 'session.json');
 const updateSettingsFile = () => path.join(app.getPath('userData'), 'updates.json');
+const syncSettingsFile = () => path.join(app.getPath('userData'), 'sync.json');
 // Dernière release trouvée : l'installation ne porte que sur elle, jamais sur une URL reçue de la page.
 let lastUpdateCheck = null;
 let updateInProgress = false;
+// Grammaires TextMate des extensions VS Code : inventaire fait une fois, refait après un import ou un retrait.
+const importedExtensionsDir = () => path.join(app.getPath('userData'), 'vscode-extensions');
+let grammarScan = null;
+function scanGrammars(fresh = false) {
+  if (fresh || !grammarScan) {
+    grammarScan = extensions.extensionRoots({ home: app.getPath('home'), imported: importedExtensionsDir() }).then(extensions.scanExtensions);
+    grammarScan.catch(() => { grammarScan = null; });
+  }
+  return grammarScan;
+}
 
 // Onglets ouverts et onglet actif, rouverts au lancement suivant. Seuls des chemins de dépôts vérifiés y sont écrits.
 function readSession() {
@@ -199,7 +212,13 @@ app.whenReady().then(() => {
   });
   handle('repository:refresh', async (_event, { root }) => snapshot(root));
   // Récupération explicite depuis les dépôts distants : met à jour les branches distantes affichées, rien d'autre.
-  handle('repository:fetch', async (_event, { root }) => { await service(root).fetch(); return snapshot(root); });
+  // `background` : fetch automatique, sans invite d'identifiants, sauté pendant une opération Git ou un autre fetch.
+  handle('repository:fetch', async (_event, { root, background }) => {
+    const { skipped } = await service(root).fetch({ background: background === true });
+    return { skipped, ...(await snapshot(root)) };
+  });
+  handle('sync:settings', async () => syncSettings.readSyncSettings(syncSettingsFile()));
+  handle('sync:settings:set', async (_event, changes) => syncSettings.writeSyncSettings(syncSettingsFile(), changes));
   handle('repository:branch:checkout-remote', async (_event, { root, name }) => service(root).checkoutRemote(name));
   handle('repository:versions', async (_event, { root, path: filePath, staged }) => service(root).workingVersions(filePath, staged === true));
   handle('repository:commit:versions', async (_event, { root, hash, path: filePath }) => service(root).commitVersions(hash, filePath));
@@ -259,6 +278,8 @@ Un point de récupération local sera conservé.`)) return null;
   // Seuls le push (transmission hors de la machine) et les rebases (réécriture de l'historique) en demandent une.
   handle('repository:stage', async (_event, { root, path: filePath }) => service(root).stage(filePath));
   handle('repository:unstage', async (_event, { root, path: filePath }) => service(root).unstage(filePath));
+  handle('repository:stage-lines', async (_event, { root, path: filePath, request }) => service(root).stageLines(filePath, request));
+  handle('repository:unstage-lines', async (_event, { root, path: filePath, request }) => service(root).unstageLines(filePath, request));
   handle('repository:stage-all', async (_event, { root }) => service(root).stageAll());
   handle('repository:unstage-all', async (_event, { root }) => service(root).unstageAll());
   handle('repository:commit', async (_event, { root, message }) => service(root).commit(message));
@@ -378,6 +399,16 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
+  // Revert et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
+  handle('repository:revert', async (_event, { root, commit, mainline }) => service(root).revert(commit, mainline ?? null));
+  handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
+  handle('repository:tag:push', async (_event, { root, name, remote }) => {
+    const refs = await service(root).references();
+    if (!refs.tags.some((tag) => tag.name === name)) throw new GitWorkbenchError('tag-not-found');
+    if (!refs.remotes.some((item) => item.name === remote)) throw new GitWorkbenchError('remote-not-found');
+    if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
+    return service(root).pushTag(name, remote);
+  });
   // Merge local : la page montre d'abord les commits entrants, puis le merge porte sur le commit prévisualisé
   // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
   handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));
@@ -409,6 +440,21 @@ Git va les oublier. Si l’une d’elles est seulement sur un disque débranché
     // Pas de seconde confirmation : le plan, action par action, vient d'être validé dans l'éditeur de rebase, et
     // une référence de récupération permet de revenir en arrière.
     return service(root).interactiveRebase(upstream, plan);
+  });
+  // Coloration par les grammaires TextMate : fichiers lus ici, sur le disque local uniquement. La page demande une grammaire
+  // par sa portée ; l'import d'un .vsix passe par le sélecteur de fichiers, jamais par un chemin reçu de la page.
+  handle('grammars:catalog', async () => (await scanGrammars()).catalog);
+  handle('grammars:read', async (_event, { scopeName }) => extensions.readGrammar(await scanGrammars(), scopeName));
+  handle('grammars:onig', async () => fs.promises.readFile(require.resolve('vscode-oniguruma/release/onig.wasm')));
+  handle('extensions:import', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'Extension VS Code', extensions: ['vsix'] }] });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    const imported = await extensions.importVsix(result.filePaths[0], importedExtensionsDir());
+    return { imported, catalog: (await scanGrammars(true)).catalog };
+  });
+  handle('extensions:remove', async (_event, { id }) => {
+    await extensions.removeImported(importedExtensionsDir(), id);
+    return (await scanGrammars(true)).catalog;
   });
   // Mises à jour : réseau limité à l'API publique des releases GitHub, sur demande ou si la vérification au démarrage
   // a été activée. Sous Windows l'installateur est téléchargé, vérifié (SHA-256) puis lancé ; ailleurs, la page de la

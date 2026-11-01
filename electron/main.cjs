@@ -206,9 +206,6 @@ app.whenReady().then(() => {
     const { skipped } = await service(root).fetch({ background: background === true });
     return { skipped, ...(await snapshot(root)) };
   });
-  // Pull en fast-forward uniquement, sans confirmation : aucune réécriture ni merge, Git refuse de lui-même s'il
-  // écraserait des changements locaux.
-  handle('repository:pull', async (_event, { root }) => service(root).pull());
   handle('sync:settings', async () => syncSettings.readSyncSettings(syncSettingsFile()));
   handle('sync:settings:set', async (_event, changes) => syncSettings.writeSyncSettings(syncSettingsFile(), changes));
   handle('repository:branch:checkout-remote', async (_event, { root, name }) => service(root).checkoutRemote(name));
@@ -286,6 +283,18 @@ Un point de récupération local sera conservé.`)) return null;
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
+  // Merge local : la page montre d'abord les commits entrants, puis le merge porte sur le commit prévisualisé
+  // (`target`). Point de reprise enregistré avant : pas de seconde confirmation, comme le rebase interactif.
+  handle('repository:merge:preview', async (_event, { root, source }) => service(root).mergePreview(source));
+  handle('repository:merge', async (_event, { root, source, target, fastForward }) => {
+    if (typeof target !== 'string' || !target) throw new GitWorkbenchError('merge-source-changed');
+    return service(root).merge(source, { fastForward: fastForward === true, expectedTarget: target });
+  });
+  // Pull explicite vers l'upstream affiché : fetch puis fast-forward seul. Une divergence revient sans rien intégrer.
+  handle('repository:pull', async (_event, { root, upstream }) => {
+    if (typeof upstream !== 'string' || !upstream) throw new GitWorkbenchError('upstream-missing');
+    return service(root).pull(upstream);
+  });
   handle('repository:rebase', async (_event, { root, upstream }) => {
     await service(root).assertClean();
     const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);

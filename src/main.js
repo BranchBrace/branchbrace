@@ -3,6 +3,7 @@ import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
 import { alertDialog, askText, confirmDialog, element, modal, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
+import { chooseIntegration, confirmMerge } from './merge-dialog.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
 import { describeError } from './errors.js';
@@ -154,6 +155,8 @@ const ui = {
     $('#branch-name').textContent = status.branch;
     $('#push-button').disabled = !status.upstream;
     $('#push-button').title = status.upstream ? `Pousser vers ${status.upstream}` : 'Upstream non configuré';
+    $('#pull-button').disabled = !status.upstream;
+    $('#pull-button').title = status.upstream ? `Récupérer ${status.upstream} puis avancer la branche (fast-forward seul)` : 'Upstream non configuré';
     this.renderSyncState(status);
     if (this.selectedCommit !== WIP && !this.graph.commits.some((commit) => commit.hash === this.selectedCommit)) { this.selectedCommit = WIP; this.details = null; }
     this.renderGraph();
@@ -423,8 +426,7 @@ const ui = {
     const status = await this.act(() => window.workbench.checkoutRemote(ui.root, name));
     if (status) { await this.reload(); this.message(`Branche locale « ${status.branch} » créée : elle suit ${name}.`); }
   },
-  // ↑ commits locaux à pousser, ↓ commits distants à récupérer par Pull. Le bouton Pull reste actif dès qu'il y a
-  // un upstream : un clic sur une branche divergée explique le refus.
+  // ↑ commits locaux à pousser, ↓ commits distants à récupérer par Pull, d'après le dernier fetch.
   renderSyncState(status) {
     const state = $('#sync-state');
     const { upstream, ahead = 0, behind = 0 } = status;
@@ -435,12 +437,8 @@ const ui = {
     down.classList.toggle('behind', behind > 0);
     state.replaceChildren(up, ' ', down);
     state.title = !upstream ? '' : ahead && behind
-      ? `Divergée de ${upstream} : ${ahead} commit(s) local(aux), ${behind} distant(s). Un pull en avance rapide est impossible.`
+      ? `Divergée de ${upstream} : ${ahead} commit(s) local(aux), ${behind} distant(s). Pull n’avancera pas la branche : il proposera un merge ou un rebase explicite.`
       : `${ahead} commit(s) à pousser, ${behind} à récupérer depuis ${upstream} (état du dernier fetch).`;
-    $('#pull-button').disabled = !upstream;
-    $('#pull-button').title = !upstream ? 'Upstream non configuré'
-      : behind ? `Avancer ${status.branch} jusqu’à ${upstream} (${behind} commit(s), avance rapide uniquement)`
-        : `Récupérer ${upstream} et avancer ${status.branch} s’il y a du nouveau (avance rapide uniquement)`;
   },
   // Échec d'un fetch automatique : un point sur le bouton Fetch, le détail dans son info-bulle, pas de fenêtre.
   setSyncError(error) {
@@ -449,16 +447,6 @@ const ui = {
     button.title = error
       ? `Dernier fetch automatique échoué : ${describeError(error)} Cliquer pour réessayer.`
       : 'Récupérer les branches des dépôts distants (git fetch --all --prune)';
-  },
-  async pull() {
-    $('#pull-button').disabled = true;
-    this.message(`Pull de ${this.upstream} (avance rapide uniquement)…`);
-    const result = await this.act(() => window.workbench.pull(ui.root));
-    await this.reload();
-    if (!result) return;
-    this.message(result.updated
-      ? `${this.branch} avancée jusqu’à ${result.upstream} (${result.hash.slice(0, 12)}).`
-      : `${this.branch} est déjà à jour avec ${result.upstream}.`);
   },
   async fetch() {
     $('#fetch-button').disabled = true;
@@ -584,6 +572,31 @@ const ui = {
     const result = await this.act(() => window.workbench.interactiveRebase(ui.root, onto, plan));
     if (result) { await this.reload(); this.message(`Rebase interactif terminé. Récupération conservée : ${result.recoveryRef}.`); }
   },
+  // Les commits entrants s'affichent avant tout changement ; un refus (conflit compris) recharge la vue pour montrer
+  // l'opération en cours.
+  async merge(source, label = source) {
+    const preview = await this.act(() => window.workbench.mergePreview(ui.root, source));
+    if (!preview) return;
+    if (!preview.total) { this.message(`« ${this.branch} » contient déjà tous les commits de « ${label} ».`); return; }
+    const choice = await confirmMerge({ source: label, branch: this.branch, preview });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.merge(ui.root, source, preview.target, choice.fastForward));
+    await this.reload();
+    if (result) this.message(`${result.fastForwarded ? 'Fast-forward' : 'Merge'} de « ${label} » terminé. Récupération conservée : ${result.recoveryRef}.`);
+  },
+  async pull() {
+    if (!this.upstream) return;
+    $('#pull-button').disabled = true;
+    this.message(`Pull depuis ${this.upstream}…`);
+    const result = await this.act(() => window.workbench.pull(ui.root, this.upstream));
+    await this.reload();
+    if (!result) return;
+    if (result.pulled) { this.message(`Pull terminé : ${result.behind} commit(s) intégré(s) en fast-forward. Récupération conservée : ${result.recoveryRef}.`); return; }
+    if (!result.diverged) { this.message(`« ${this.branch} » est à jour avec ${result.upstream}${result.ahead ? ` (${result.ahead} commit(s) à pousser)` : ''}.`); return; }
+    const choice = await chooseIntegration({ branch: this.branch, ...result });
+    if (choice === 'merge') await this.merge(result.upstream);
+    else if (choice === 'rebase') await this.rebase(result.upstream);
+  },
   async push() {
     const result = await this.act(() => window.workbench.push(ui.root, this.upstream));
     if (result) { await this.reload(); this.message(`Push vérifié vers ${result.upstream} (${result.hash.slice(0, 12)}).`); }
@@ -594,6 +607,7 @@ const ui = {
     showMenu([
       ['Créer une branche ici…', () => this.createBranch(commit.hash)],
       ['Cherry-pick ce commit', () => this.cherryPick(commit.hash)],
+      [`Merger ${short} dans « ${this.branch} »…`, () => this.merge(commit.hash, short)],
       [`Rebaser « ${this.branch} » sur ${short}`, () => this.rebase(commit.hash)],
       [`Rebase interactif de « ${this.branch} » depuis ${short}…`, () => this.interactiveRebase(commit.hash, short)],
       null,
@@ -610,7 +624,9 @@ const ui = {
       if (remote.trackedBy) items.push([`Basculer sur « ${remote.trackedBy} » (qui la suit)`, () => this.checkout(remote.trackedBy), remote.trackedBy === this.branch]);
       else items.push([`Créer « ${remote.branch || ref.name} » en local et basculer`, () => this.checkoutRemote(ref.name)]);
     }
+    if (isCurrent) items.push([this.upstream ? `Pull depuis ${this.upstream}` : 'Pull (upstream non configuré)', () => this.pull(), !this.upstream]);
     if (isCurrent) items.push([this.upstream ? `Push vers ${this.upstream}` : 'Push (upstream non configuré)', () => this.push(), !this.upstream]);
+    if (!isCurrent) items.push([`Merger « ${ref.name} » dans « ${this.branch} »…`, () => this.merge(ref.name)]);
     if (kind !== 'tags' && !isCurrent) {
       items.push([`Rebaser « ${this.branch} » sur « ${ref.name} »`, () => this.rebase(ref.name)]);
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);

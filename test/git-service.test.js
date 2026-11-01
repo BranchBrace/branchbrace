@@ -206,23 +206,23 @@ test('pull fast-forwards the current branch to its upstream and verifies HEAD', 
   const { repo, service, publish } = await trackedFixture(t);
   const remoteHead = await publish('remote.txt', 'remote advance\n');
   await writeFile(path.join(repo, 'untracked.txt'), 'kept\n');
-  const result = await service.pull();
-  assert.equal(result.updated, true);
+  const result = await service.pull('origin/main');
+  assert.equal(result.pulled, true);
   assert.equal(result.upstream, 'origin/main');
-  assert.equal(result.hash, remoteHead);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), remoteHead);
   assert.equal(git(repo, 'rev-list', '--count', 'HEAD'), '2');
   assert.equal(await readFile(path.join(repo, 'untracked.txt'), 'utf8'), 'kept\n');
-  assert.equal((await service.pull()).updated, false);
+  assert.equal((await service.pull('origin/main')).pulled, false);
 });
 
-test('pull refuses diverged branches without merging or rebasing', async (t) => {
+test('pull leaves diverged branches untouched and the status reports ahead and behind', async (t) => {
   const { repo, service, publish } = await trackedFixture(t);
   await publish('remote.txt', 'remote advance\n');
   await writeFile(path.join(repo, 'base.txt'), 'local advance\n');
   await service.stage('base.txt'); await service.commit('local advance');
   const localHead = git(repo, 'rev-parse', 'HEAD');
-  await assert.rejects(service.pull(), (error) => error.code === 'pull-diverged');
+  const result = await service.pull('origin/main');
+  assert.deepEqual([result.pulled, result.diverged], [false, true]);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), localHead);
   assert.equal(git(repo, 'rev-list', '--merges', '--count', 'HEAD'), '0');
   const status = await service.status();
@@ -235,14 +235,9 @@ test('pull leaves conflicting uncommitted changes to Git’s refusal', async (t)
   await publish('base.txt', 'remote edit\n');
   await writeFile(path.join(repo, 'base.txt'), 'uncommitted edit\n');
   const localHead = git(repo, 'rev-parse', 'HEAD');
-  await assert.rejects(service.pull(), (error) => error.code === 'unsafe-working-tree');
+  await assert.rejects(service.pull('origin/main'), (error) => error.code === 'unsafe-working-tree');
   assert.equal(git(repo, 'rev-parse', 'HEAD'), localHead);
   assert.equal(await readFile(path.join(repo, 'base.txt'), 'utf8'), 'uncommitted edit\n');
-});
-
-test('pull without an upstream is refused', async (t) => {
-  const { service } = await fixture(t);
-  await assert.rejects(service.pull(), (error) => error.code === 'upstream-missing');
 });
 
 test('background fetch environment never prompts for credentials', async () => {

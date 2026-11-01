@@ -258,7 +258,8 @@ dialog .dialog-field+.dialog-field{margin-top:10px}
 .change-A{--change:#3ddc97}.change-M{--change:#ffc247}.change-D{--change:#ff5d6c}.change-R,.change-C{--change:#5eb1ff}.change-T,.change-U{--change:#c084fc}.change-\?{--change:#86e0ce}
 .change-badge{width:20px;height:20px;border-radius:5px;font-size:11px;background:var(--change,#81afb5);color:#0b1220;border:0}
 .kind{color:var(--change,#9cc4c6)}
-.details-file{padding:7px 8px;font-size:12.5px}
+.details-file{padding:3px 8px;font-size:12.5px}
+.details-file .change-icon{color:var(--change,#81afb5)}
 .details-file.nested{padding-left:26px}
 .details-file.selected{background:#22405a;border-left-color:var(--change,var(--accent))}
 .commit-details h2.details-subject{font-size:16px;line-height:1.35}

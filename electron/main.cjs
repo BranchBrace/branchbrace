@@ -272,6 +272,22 @@ Un point de récupération local sera conservé.`)) return null;
   });
   handle('repository:branches', async (_event, { root }) => service(root).branches());
   handle('repository:branch:create', async (_event, { root, name, startPoint }) => service(root).createBranch(name, startPoint || null));
+  // Renommer en local se défait en renommant à nouveau : sans confirmation. Renommer aussi sur le dépôt distant
+  // publie un nouveau nom et en supprime un : confirmation explicite, avec ce qui sera fait.
+  handle('repository:branch:rename', async (_event, { root, name, newName, remote }) => {
+    if (remote === true) {
+      const branch = (await service(root).references()).local.find((item) => item.name === name);
+      if (!branch?.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+      if (!await confirm('Renommer aussi la branche distante ?', `« ${name} » deviendra « ${newName} » en local et sur le dépôt distant de ${branch.upstream} :
+
+1. push de « ${newName} » (nouvelle branche distante, aucun force-push) puis vérification ;
+2. « ${newName} » suivra cette nouvelle branche distante ;
+3. suppression de ${branch.upstream} sur le serveur, seulement si elle pointe encore sur ${branch.hash.slice(0, 12)}.
+
+Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivront pas automatiquement.`)) return null;
+    }
+    return service(root).renameBranch(name, newName, { remote: remote === true });
+  });
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));

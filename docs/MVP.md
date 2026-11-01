@@ -53,6 +53,7 @@ Clone/init; branch deletion; local merge; automatic fetch/pull; PR/MR creation a
 - B8. Commit review: every file changed by a commit, stacked with its own diff (collapsed to the changed regions), reached from the commit panel; files can be listed flat or grouped by folder.
 - B9. Interactive rebase plan editor: full-window, one colour and icon per action, rows reordered by dragging. Starting it from the validated plan needs no second confirmation; the recovery ref remains.
 - B10. Application menu in an icon left of the tabs (no native menu bar); informational messages are short toasts, confirmations stay for push, branch rewrite, abort, skip and amend of a pushed commit.
+- B11. Rename a local branch from its context menu: the name is validated with `git check-ref-format --branch` and applied with `git branch -m` (never `-M`), so a name already taken is refused and no branch is replaced; the upstream configuration follows. Renaming the tracked remote branch too is a separate, unchecked-by-default option that asks for confirmation: it is refused before any change unless the remote branch points at the local commit and the new name is free remotely, then pushes the new name (no force-push, verified with `ls-remote`), tracks it, and deletes the old remote name only with a lease on that exact commit, so no remote commit can be lost (A12/A13).
 
 ## Architecture and delivery decisions
 

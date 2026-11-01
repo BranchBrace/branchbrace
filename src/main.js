@@ -1,7 +1,7 @@
 import { WIP, renderGraph } from './graph-view.js';
 import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
-import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
+import { alertDialog, askRename, askText, confirmDialog, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
@@ -525,6 +525,14 @@ const ui = {
     if (!name) return;
     if (await this.act(() => window.workbench.createBranch(ui.root, name, startPoint))) { await this.reload(); this.message(`Branche « ${name} » créée.`); }
   },
+  async renameBranch(ref) {
+    const choice = await askRename({ name: ref.name, upstream: ref.upstream && !ref.gone ? ref.upstream : null });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.renameBranch(ui.root, ref.name, choice.name, choice.remote));
+    if (!result) return;
+    await this.reload();
+    this.message(result.remote ? `Branche « ${ref.name} » renommée « ${result.branch} », aussi sur ${result.remote.name}.` : `Branche « ${ref.name} » renommée « ${result.branch} ».`);
+  },
   async cherryPick(hash) {
     const result = await this.act(() => window.workbench.cherryPick(ui.root, hash));
     if (result) { await this.reload(); this.message(`Cherry-pick terminé. Récupération conservée : ${result.recoveryRef}.`); }
@@ -574,6 +582,7 @@ const ui = {
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);
     }
     if (ref.hash) items.push(['Créer une branche ici…', () => this.createBranch(ref.hash)]);
+    if (kind === 'local') items.push(['Renommer…', () => this.renameBranch(this.findRef('local', ref.name) || ref)]);
     // Page de la branche sur GitHub/GitLab : distante elle-même, ou upstream d'une branche locale.
     const remoteRef = kind === 'remote' ? this.findRef('remote', ref.name) : kind === 'local' && ref.upstream ? this.findRef('remote', ref.upstream) : null;
     const site = remoteRef && (this.refs.remotes || []).find((item) => item.name === remoteRef.remote && item.web);

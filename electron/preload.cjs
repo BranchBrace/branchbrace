@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('workbench', Object.freeze({
   branches: (root) => call('repository:branches', { root }),
   createBranch: (root, name, startPoint = null) => call('repository:branch:create', { root, name, startPoint }),
   switchBranch: (root, name) => call('repository:branch:switch', { root, name }),
+  renameBranch: (root, name, newName, remote = false) => call('repository:branch:rename', { root, name, newName, remote }),
   cherryPick: (root, commit) => call('repository:cherry-pick', { root, commit }),
   rebase: (root, upstream) => call('repository:rebase', { root, upstream }),
   interactiveRebaseCommits: (root, upstream) => call('repository:rebase-interactive:commits', { root, upstream }),

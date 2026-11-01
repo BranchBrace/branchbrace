@@ -380,6 +380,58 @@ export class GitService {
     return this.status();
   }
 
+  // Renomme une branche locale (`branch -m`, jamais `-M` : un nom déjà pris est refusé). Git déplace aussi sa
+  // configuration, donc son upstream. Avec `remote`, la branche distante suivie est renommée de la même façon : le
+  // nouveau nom est poussé puis vérifié, l'upstream le suit, et l'ancien nom n'est supprimé du dépôt distant que s'il
+  // pointe encore exactement sur le commit qui vient d'être copié : aucun commit distant ne peut être perdu.
+  async renameBranch(oldName, newName, { remote = false } = {}) {
+    await this.#ensureRepositoryPath();
+    this.#validateBranchName(oldName);
+    await this.#checkBranchName(newName);
+    const { local } = await this.references();
+    const branch = local.find((item) => item.name === oldName);
+    if (!branch) throw new GitWorkbenchError('branch-not-found');
+    if (oldName === newName) return { branch: newName, remote: null };
+    if (local.some((item) => item.name === newName)) throw new GitWorkbenchError('branch-name-taken');
+    const target = remote ? await this.#remoteRenameTarget(branch, newName) : null;
+    await runGit(this.repositoryPath, ['branch', '-m', '--', oldName, newName]);
+    if (!target) return { branch: newName, remote: null };
+    await runGit(this.repositoryPath, ['push', '--porcelain', target.remote, `refs/heads/${newName}:refs/heads/${newName}`]);
+    if (await this.#remoteHead(target.remote, newName) !== branch.hash) throw new GitWorkbenchError('push-verification-failed');
+    await runGit(this.repositoryPath, ['branch', `--set-upstream-to=${target.remote}/${newName}`, '--', newName]);
+    try {
+      await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=refs/heads/${target.branch}:${branch.hash}`, target.remote, `:refs/heads/${target.branch}`]);
+    } catch { throw new GitWorkbenchError('remote-old-branch-kept'); }
+    return { branch: newName, remote: { name: target.remote, from: target.branch, to: newName } };
+  }
+
+  // Branche distante à renommer avec la locale : elle doit exister, pointer sur le même commit (sinon des commits
+  // seraient d'un seul côté) et le nouveau nom doit être libre sur le serveur.
+  async #remoteRenameTarget(branch, newName) {
+    if (!branch.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+    const remote = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.remote`], { acceptExitCodes: [1] })).trim();
+    const merge = (await runGit(this.repositoryPath, ['config', '--get', `branch.${branch.name}.merge`], { acceptExitCodes: [1] })).trim();
+    if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) throw new GitWorkbenchError('upstream-missing');
+    const target = { remote, branch: merge.slice(11) };
+    const [current, taken] = await Promise.all([this.#remoteHead(remote, target.branch), this.#remoteHead(remote, newName)]);
+    if (current !== branch.hash) throw new GitWorkbenchError('remote-rename-diverged');
+    if (taken) throw new GitWorkbenchError('branch-name-taken-remote');
+    return target;
+  }
+
+  async #remoteHead(remote, branch) {
+    const raw = await runGit(this.repositoryPath, ['ls-remote', '--heads', remote, `refs/heads/${branch}`]).catch(() => { throw new GitWorkbenchError('fetch-failed'); });
+    return raw.split('\n').map((line) => line.split(/\s+/)).find(([, ref]) => ref === `refs/heads/${branch}`)?.[0] ?? null;
+  }
+
+  // `check-ref-format --branch` valide le nom selon les règles de Git ; il développe aussi « @{-1} » en nom réel,
+  // qu'on refuse : le nom saisi doit être exactement celui qui sera créé.
+  async #checkBranchName(name) {
+    this.#validateBranchName(name);
+    const checked = await runGit(this.repositoryPath, ['check-ref-format', '--branch', name]).catch(() => { throw new GitWorkbenchError('invalid-branch-name'); });
+    if (checked.trim() !== name) throw new GitWorkbenchError('invalid-branch-name');
+  }
+
   async references() {
     await this.#ensureRepositoryPath();
     const [raw, urls] = await Promise.all([

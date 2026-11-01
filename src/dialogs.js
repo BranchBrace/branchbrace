@@ -50,6 +50,29 @@ export function askText({ title, label, value = '', confirmLabel, hint }) {
   return modal(title, body, { confirmLabel, collect: () => input.value.trim(), validate: (text) => (text ? null : 'Une valeur est requise.') });
 }
 
+// Renommage d'une branche : nouveau nom prérempli et, si elle a une distante, case (décochée) pour la renommer aussi.
+export function askRename({ name, upstream }) {
+  const input = element('input', 'text-input');
+  input.value = name;
+  input.spellcheck = false;
+  const field = element('label', 'dialog-field');
+  field.append(element('span', 'eyebrow', 'NOUVEAU NOM'), input);
+  const body = [field, element('p', 'dialog-hint', 'Git refuse un nom déjà pris : aucune branche n’est remplacée. L’upstream suit la branche renommée.')];
+  const remote = element('input');
+  remote.type = 'checkbox';
+  if (upstream) {
+    const label = element('label', 'dialog-check');
+    label.append(remote, ` Renommer aussi ${upstream} sur le dépôt distant (confirmation demandée)`);
+    body.push(label);
+  }
+  setTimeout(() => { input.focus(); input.select(); });
+  return modal(`Renommer « ${name} »`, body, {
+    confirmLabel: 'Renommer',
+    collect: () => ({ name: input.value.trim(), remote: remote.checked }),
+    validate: (value) => (!value.name ? 'Un nom est requis.' : value.name === name ? 'Le nouveau nom est identique à l’actuel.' : null),
+  });
+}
+
 // Menu contextuel unique : `items` est une liste de [libellé, action] ou de null pour un séparateur.
 const menu = () => document.querySelector('#context-menu');
 export function showMenu(items, x, y) {

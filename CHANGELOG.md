@@ -1,3 +1,12 @@
+# [1.1.0-rc.1](https://github.com/monnierant/git-workbench/compare/v1.0.0...v1.1.0-rc.1) (2026-11-01)
+
+
+### Features
+
+* **ui:** liste de fichiers compacte et défilement conservé ([8c801d6](https://github.com/monnierant/git-workbench/commit/8c801d658b42d113f9133cd27e176483b54d6cc4))
+* **ui:** logo de l'hébergeur à côté de chaque dépôt distant ([15a5bb6](https://github.com/monnierant/git-workbench/commit/15a5bb6dc0574d3496eaac673206669e953472ed))
+* **updates:** mises à jour depuis les releases GitHub, canal stable ou bêta ([efd1518](https://github.com/monnierant/git-workbench/commit/efd15180b27ba146edd74adf5473e0e18fb6802a))
+
 # 1.0.0 (2026-10-31)
 
 

@@ -1,3 +1,12 @@
+# [1.1.0-rc.9](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.8...v1.1.0-rc.9) (2026-11-01)
+
+
+### Bug Fixes
+
+* **ci:** épingler le job release sur ubuntu-24.04 ([6986b52](https://github.com/BranchBrace/branchbrace/commit/6986b52803f3adb47338a8b2a1edd7a3fc195cd8))
+* **packaging:** embarquer sync-settings.js et favicon.js dans l'asar ([894c96f](https://github.com/BranchBrace/branchbrace/commit/894c96f37efe1840a62ca81faf7aa607d8a1ffb6))
+* **updates:** suivre le dépôt transféré vers BranchBrace/branchbrace ([c318c5a](https://github.com/BranchBrace/branchbrace/commit/c318c5a20066f082c3021ddb2c5d68cd31aa3760))
+
 # [1.1.0-rc.8](https://github.com/monnierant/git-workbench/compare/v1.1.0-rc.7...v1.1.0-rc.8) (2026-11-01)
 
 

@@ -317,16 +317,31 @@ Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivr
   handle('repository:worktree:remove', async (_event, { root, path: target }) => {
     const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
     if (!worktree) throw new GitWorkbenchError('worktree-not-found');
-    if (!worktree.prunable && !await confirm('Supprimer la worktree ?', `Le dossier ${worktree.path} sera supprimé${worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : ''}.
+    const kept = worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : '';
+    const confirmed = worktree.prunable
+      ? await confirm('Oublier la worktree introuvable ?', `Le dossier ${worktree.path} est introuvable : Git va oublier cette seule worktree${kept}.
 
-Git refusera s’il contient des changements non commités ou des fichiers non suivis : rien ne sera perdu.`)) return null;
+S’il est seulement sur un disque débranché ou un partage indisponible, rebranchez-le plutôt : une fois oubliée, la worktree n’est plus reconnue par le dépôt.`)
+      : await confirm('Supprimer la worktree ?', `Le dossier ${worktree.path} sera supprimé${kept}.
+
+Git refusera s’il contient des changements non commités ou des fichiers non suivis : rien ne sera perdu.`);
+    if (!confirmed) return null;
     const worktrees = await service(root).removeWorktree(worktree.path);
     // Son onglet éventuel n'a plus de dépôt derrière lui.
     for (const key of [...repositories.keys()]) if (samePath(key, worktree.path)) repositories.delete(key);
     writeSession(root);
     return { worktrees, tabs: [...repositories.keys()] };
   });
-  handle('repository:worktree:prune', async (_event, { root }) => service(root).pruneWorktrees());
+  // `git worktree prune` oublie toutes les worktrees introuvables, y compris celles d'un disque momentanément débranché.
+  handle('repository:worktree:prune', async (_event, { root }) => {
+    const missing = (await service(root).worktrees()).filter((item) => item.prunable && !item.locked);
+    if (missing.length && !await confirm('Oublier les worktrees introuvables ?', `Ces worktrees sont introuvables (dossier supprimé, déplacé ou sur un disque débranché) et ne peuvent pas être ouvertes :
+
+${missing.map((item) => `• ${item.path}${item.branch ? ` (branche « ${item.branch} », conservée)` : ''}`).join('\n')}
+
+Git va les oublier. Si l’une d’elles est seulement sur un disque débranché, rebranchez-le plutôt.`)) return null;
+    return service(root).pruneWorktrees();
+  });
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));

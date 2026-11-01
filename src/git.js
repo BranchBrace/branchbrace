@@ -195,12 +195,20 @@ export function samePath(a, b) {
   return normalize(a) === normalize(b);
 }
 
+// `child` est-il `parent` lui-même ou un chemin à l'intérieur ?
+export function isInside(child, parent) {
+  const normalize = (value) => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value));
+  const relative = path.relative(normalize(parent), normalize(child));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 // `git worktree list --porcelain -z` : un attribut par champ, une worktree par bloc terminé par un champ vide. La
-// première est la worktree principale ; `current` désigne celle du dépôt ouvert.
-export function parseWorktrees(raw, currentPath) {
+// première est la worktree principale ; `current` désigne celle du dépôt ouvert. Sans `-z` (Git < 2.36), les champs
+// sont séparés par des retours à la ligne : `separator` vaut alors '\n'.
+export function parseWorktrees(raw, currentPath, separator = '\0') {
   const worktrees = [];
   let item = null;
-  for (const field of raw.split('\0')) {
+  for (const field of raw.split(separator).map((value) => (separator === '\n' ? value.replace(/\r$/, '') : value))) {
     if (!field) { item = null; continue; }
     const [key, ...rest] = field.split(' ');
     const value = rest.join(' ');
@@ -431,13 +439,21 @@ export class GitService {
     const target = remote ? await this.#remoteRenameTarget(branch, newName) : null;
     await runGit(this.repositoryPath, ['branch', '-m', '--', oldName, newName]);
     if (!target) return { branch: newName, remote: null };
-    await runGit(this.repositoryPath, ['push', '--porcelain', target.remote, `refs/heads/${newName}:refs/heads/${newName}`]);
-    if (await this.#remoteHead(target.remote, newName) !== branch.hash) throw new GitWorkbenchError('push-verification-failed');
-    await runGit(this.repositoryPath, ['branch', `--set-upstream-to=${target.remote}/${newName}`, '--', newName]);
+    // La branche est déjà renommée en local : un échec de publication le dit explicitement, pour que la vue suive
+    // le nouveau nom.
+    try {
+      await runGit(this.repositoryPath, ['push', '--porcelain', target.remote, `refs/heads/${newName}:refs/heads/${newName}`]);
+      if (await this.#remoteHead(target.remote, newName) !== branch.hash) throw new Error('verification');
+      // L'upstream est écrit dans la configuration plutôt que par `--set-upstream-to` : celui-ci exige le ref
+      // `<remote>/<nom>`, absent d'un clone single-branch.
+      await runGit(this.repositoryPath, ['config', `branch.${newName}.remote`, target.remote]);
+      await runGit(this.repositoryPath, ['config', `branch.${newName}.merge`, `refs/heads/${newName}`]);
+    } catch { throw new GitWorkbenchError('remote-rename-publish-failed'); }
+    const renamed = { name: target.remote, from: target.branch, to: newName };
     try {
       await runGit(this.repositoryPath, ['push', '--porcelain', `--force-with-lease=refs/heads/${target.branch}:${branch.hash}`, target.remote, `:refs/heads/${target.branch}`]);
-    } catch { throw new GitWorkbenchError('remote-old-branch-kept'); }
-    return { branch: newName, remote: { name: target.remote, from: target.branch, to: newName } };
+    } catch { return { branch: newName, remote: { ...renamed, oldBranchKept: true } }; }
+    return { branch: newName, remote: renamed };
   }
 
   // Branche distante à renommer avec la locale : elle doit exister, pointer sur le même commit (sinon des commits
@@ -467,9 +483,17 @@ export class GitService {
     if (checked.trim() !== name) throw new GitWorkbenchError('invalid-branch-name');
   }
 
+  // `-z` n'existe que depuis Git 2.36 : sans lui, la sortie ligne à ligne est lue à la place. Si Git ne sait pas du
+  // tout lister les worktrees, la liste est vide : le dépôt s'ouvre quand même (références et instantané en dépendent).
   async worktrees() {
     await this.#ensureRepositoryPath();
-    return parseWorktrees(await runGit(this.repositoryPath, ['worktree', 'list', '--porcelain', '-z']), this.repositoryPath);
+    try {
+      return parseWorktrees(await runGit(this.repositoryPath, ['worktree', 'list', '--porcelain', '-z']), this.repositoryPath);
+    } catch {
+      try {
+        return parseWorktrees(await runGit(this.repositoryPath, ['worktree', 'list', '--porcelain']), this.repositoryPath, '\n');
+      } catch { return []; }
+    }
   }
 
   // Nouvelle worktree dans `target` (absent ou vide), sur une branche existante qui n'est extraite nulle part, ou sur
@@ -478,6 +502,8 @@ export class GitService {
     await this.#ensureRepositoryPath();
     if (typeof target !== 'string' || !target || target.includes('\0') || !path.isAbsolute(target)) throw new GitWorkbenchError('invalid-path');
     const destination = path.resolve(target);
+    // Une worktree imbriquée dans une autre y apparaîtrait comme un dossier non suivi (et serait committable).
+    if ((await this.worktrees()).some((item) => isInside(destination, item.path))) throw new GitWorkbenchError('worktree-path-inside-worktree');
     if (existsSync(destination) && (await readdir(destination).catch(() => { throw new GitWorkbenchError('worktree-path-exists'); })).length) throw new GitWorkbenchError('worktree-path-exists');
     if (newBranch) {
       await this.#checkBranchName(branch);
@@ -495,15 +521,32 @@ export class GitService {
 
   // Supprime une worktree liée sans `--force` : Git refuse s'il y reste des changements non commités ou des fichiers
   // non suivis, qui seraient perdus. Sa branche est conservée. Une worktree dont le dossier a disparu est seulement
-  // oubliée (`prune`), comme toutes celles dans ce cas.
+  // oubliée : seules ses métadonnées sont effacées, jamais celles des autres (un `prune` global oublierait aussi une
+  // worktree sur un disque momentanément débranché).
   async removeWorktree(target) {
     const worktree = (await this.worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
     if (!worktree) throw new GitWorkbenchError('worktree-not-found');
     if (worktree.main) throw new GitWorkbenchError('worktree-main');
     if (worktree.current) throw new GitWorkbenchError('worktree-current');
     if (worktree.locked) throw new GitWorkbenchError('worktree-locked');
-    if (!worktree.prunable) await runGit(this.repositoryPath, ['worktree', 'remove', '--', worktree.path]);
-    return this.pruneWorktrees();
+    if (worktree.prunable) await this.#forgetWorktree(worktree.path);
+    else await runGit(this.repositoryPath, ['worktree', 'remove', '--', worktree.path]);
+    return this.worktrees();
+  }
+
+  // Efface `.git/worktrees/<id>` de la seule worktree introuvable visée : celle dont le fichier `gitdir` désigne
+  // `<chemin>/.git`. Refusé si son dossier est de nouveau présent.
+  async #forgetWorktree(worktreePath) {
+    if (existsSync(worktreePath)) throw new GitWorkbenchError('worktree-not-found');
+    const common = path.resolve(this.repositoryPath, (await runGit(this.repositoryPath, ['rev-parse', '--git-common-dir'])).trim());
+    const admin = path.join(common, 'worktrees');
+    for (const entry of await readdir(admin).catch(() => [])) {
+      const gitdir = (await readFile(path.join(admin, entry, 'gitdir'), 'utf8').catch(() => '')).trim();
+      if (!gitdir || !samePath(path.dirname(path.resolve(admin, entry, gitdir)), worktreePath)) continue;
+      await rm(path.join(admin, entry), { recursive: true, force: true });
+      return;
+    }
+    throw new GitWorkbenchError('worktree-not-found');
   }
 
   async pruneWorktrees() {

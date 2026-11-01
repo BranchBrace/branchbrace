@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitService, parseWorktrees, samePath } from '../src/git.js';
+import { GitService, isInside, parseWorktrees, samePath } from '../src/git.js';
 
 function git(cwd, ...args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -123,7 +123,11 @@ test('worktrees are created from an existing or a new branch, listed, then remov
   assert.equal(local.find((item) => item.name === 'main').worktree, null);
   await rejects(service.switchBranch('feature'), 'branch-in-other-worktree');
   await rejects(service.addWorktree(path.join(root, 'wt-again'), { branch: 'feature' }), 'branch-in-other-worktree');
-  await rejects(service.addWorktree(existing, { branch: 'other', newBranch: true }), 'worktree-path-exists');
+  await rejects(service.addWorktree(existing, { branch: 'other', newBranch: true }), 'worktree-path-inside-worktree');
+  const occupied = path.join(root, 'occupied');
+  await mkdir(occupied);
+  await writeFile(path.join(occupied, 'file.txt'), 'x\n');
+  await rejects(service.addWorktree(occupied, { branch: 'other', newBranch: true }), 'worktree-path-exists');
   await rejects(service.addWorktree('relative', { branch: 'x', newBranch: true }), 'invalid-path');
 
   const remaining = await service.removeWorktree(existing);
@@ -175,4 +179,68 @@ test('a linked worktree opens as its own repository with its own status and oper
   assert.equal(await service.operation(), null);
   await opened.abortOperation();
   assert.equal(await opened.operation(), null);
+});
+
+test('worktree list without -z (Git < 2.36) is parsed line by line', () => {
+  const raw = ['worktree /repo', 'HEAD aaa', 'branch refs/heads/main', '', 'worktree /linked', 'HEAD bbb', 'detached', 'prunable gone', ''].join('\r\n');
+  const [main, linked] = parseWorktrees(raw, '/repo', '\n');
+  assert.equal(main.branch, 'main');
+  assert.equal(main.current, true);
+  assert.equal(linked.path, path.resolve('/linked'));
+  assert.equal(linked.prunable, 'gone');
+});
+
+const hook = (bare, script) => writeFile(path.join(bare, 'hooks', 'pre-receive'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+
+test('a remote rename whose push fails reports a dedicated code and leaves the local rename in place', async (t) => {
+  const { repo, bare, service } = await withRemote(t);
+  await hook(bare, 'exit 1');
+  await rejects(service.renameBranch('feature', 'topic', { remote: true }), 'remote-rename-publish-failed');
+  assert.equal(git(repo, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/topic'), 'topic');
+  assert.equal(git(bare, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'), 'feature');
+});
+
+test('a remote rename whose old name cannot be deleted is a partial success', async (t) => {
+  const { repo, bare, service } = await withRemote(t);
+  await hook(bare, 'while read old new ref; do [ "$new" = "0000000000000000000000000000000000000000" ] && exit 1; done; exit 0');
+  const result = await service.renameBranch('feature', 'topic', { remote: true });
+  assert.deepEqual(result, { branch: 'topic', remote: { name: 'origin', from: 'feature', to: 'topic', oldBranchKept: true } });
+  assert.deepEqual(git(bare, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').split('\n'), ['feature', 'topic']);
+  assert.equal(git(repo, 'config', '--get', 'branch.topic.merge'), 'refs/heads/topic');
+});
+
+test('a remote rename in a single-branch clone configures the new upstream without its remote-tracking ref', async (t) => {
+  const { root, bare } = await withRemote(t);
+  const clone = path.join(root, 'single');
+  git(root, 'clone', '--quiet', '--single-branch', '--branch', 'feature', bare, clone);
+  git(clone, 'config', 'user.name', 'Test Fixture');
+  git(clone, 'config', 'user.email', 'fixture@example.invalid');
+  const result = await new GitService(clone).renameBranch('feature', 'topic', { remote: true });
+  assert.equal(result.remote.oldBranchKept, undefined);
+  assert.equal(git(clone, 'config', '--get', 'branch.topic.remote'), 'origin');
+  assert.equal(git(clone, 'config', '--get', 'branch.topic.merge'), 'refs/heads/topic');
+  assert.equal(git(bare, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'), 'topic');
+});
+
+test('forgetting a missing worktree keeps the metadata of other missing worktrees', async (t) => {
+  const { root, service } = await fixture(t);
+  const first = path.join(root, 'wt-first');
+  const second = path.join(root, 'wt-second');
+  await service.addWorktree(first, { branch: 'first', newBranch: true });
+  await service.addWorktree(second, { branch: 'second', newBranch: true });
+  await rm(first, { recursive: true, force: true });
+  await rm(second, { recursive: true, force: true });
+  const remaining = await service.removeWorktree(first);
+  assert.deepEqual(remaining.map((item) => [item.branch, Boolean(item.prunable)]), [['main', false], ['second', true]]);
+});
+
+test('a new worktree inside an existing worktree is refused', async (t) => {
+  const { root, repo, service } = await fixture(t);
+  await rejects(service.addWorktree(path.join(repo, 'nested'), { branch: 'nested', newBranch: true }), 'worktree-path-inside-worktree');
+  const linked = path.join(root, 'wt-linked');
+  await service.addWorktree(linked, { branch: 'linked', newBranch: true });
+  await rejects(service.addWorktree(path.join(linked, 'deeper'), { branch: 'deeper', newBranch: true }), 'worktree-path-inside-worktree');
+  await service.addWorktree(path.join(root, 'wt-linked-sibling'), { branch: 'sibling', newBranch: true });
+  assert.equal(isInside(path.join(root, '..x'), root), true);
+  assert.equal(isInside(root, path.join(root, 'child')), false);
 });

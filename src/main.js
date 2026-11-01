@@ -6,7 +6,7 @@ import { editRebasePlan } from './rebase-editor.js';
 import { chooseIntegration, confirmMerge } from './merge-dialog.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
-import { describeError } from './errors.js';
+import { describeCode, describeError } from './errors.js';
 import { checkOnStartup, openUpdates } from './update-dialog.js';
 
 const SUMMARY_LIMIT = 72;
@@ -540,11 +540,24 @@ const ui = {
     const choice = await askRename({ name: ref.name, upstream: ref.upstream && !ref.gone ? ref.upstream : null });
     if (!choice) return;
     const result = await this.act(() => window.workbench.renameBranch(ui.root, ref.name, choice.name, choice.remote));
-    if (!result) return;
+    // Rechargée même après un refus : un renommage distant à moitié fait a déjà changé le nom local.
     await this.reload();
+    if (!result) return;
+    if (result.remote?.oldBranchKept) {
+      const text = describeCode('remote-old-branch-kept');
+      this.message(text);
+      await alertDialog({ title: 'Renommage partiel', message: text });
+      return;
+    }
     this.message(result.remote ? `Branche « ${ref.name} » renommée « ${result.branch} », aussi sur ${result.remote.name}.` : `Branche « ${ref.name} » renommée « ${result.branch} ».`);
   },
+  // Une worktree introuvable ne s'ouvre pas (worktree-not-found) : on oriente vers « Oublier les worktrees introuvables ».
   async openWorktree(folder) {
+    if ((this.refs.worktrees || []).some((item) => item.prunable && item.path === folder)) {
+      this.message(`La worktree ${folder} est introuvable : elle ne peut pas être ouverte.`);
+      await this.pruneWorktrees();
+      return;
+    }
     const data = await this.act(() => window.workbench.openWorktree(ui.root, folder));
     if (data) this.open(data, `Worktree ${repositoryName(data.root)} ouverte.`);
   },
@@ -561,6 +574,11 @@ const ui = {
   async removeWorktree(worktree) {
     const result = await this.act(() => window.workbench.removeWorktree(ui.root, worktree.path));
     if (!result) return;
+    // L'onglet de la worktree supprimée disparaît : ses brouillons et ses modèles d'éditeur aussi, comme à la fermeture.
+    for (const root of [worktree.path, ...this.tabs.filter((tab) => !result.tabs.includes(tab))]) {
+      this.drafts.delete(root);
+      this.editor?.forget(root);
+    }
     this.tabs = result.tabs;
     this.renderTabs();
     await this.reload();
@@ -644,7 +662,10 @@ const ui = {
     const isCurrent = kind === 'local' && ref.name === this.branch;
     const items = [];
     const worktree = kind === 'local' ? this.findRef('local', ref.name)?.worktree : null;
-    if (worktree) items.push([`Ouvrir sa worktree (${repositoryName(worktree)})`, () => this.openWorktree(worktree)]);
+    // Une worktree introuvable (dossier supprimé ou disque débranché) ne s'ouvre pas : on propose de l'oublier.
+    const missing = worktree && (this.refs.worktrees || []).some((item) => item.branch === ref.name && item.prunable);
+    if (missing) items.push([`Oublier les worktrees introuvables (dont ${repositoryName(worktree)})`, () => this.pruneWorktrees()]);
+    else if (worktree) items.push([`Ouvrir sa worktree (${repositoryName(worktree)})`, () => this.openWorktree(worktree)]);
     else if (kind === 'local' && !isCurrent) items.push([`Basculer sur « ${ref.name} »`, () => this.checkout(ref.name)]);
     if (kind === 'local' && !isCurrent && !worktree) items.push([`Créer une worktree pour « ${ref.name} »…`, () => this.createWorktree(ref.name)]);
     if (kind === 'remote') {

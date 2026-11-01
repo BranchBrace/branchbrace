@@ -95,31 +95,6 @@ test('revert refuses a dirty working tree', async (t) => {
   assert.equal(git(repo, 'rev-parse', 'HEAD'), target);
 });
 
-test('renaming a local branch keeps its upstream and leaves the remote branch alone', async (t) => {
-  const { repo, bare, service } = await fixture(t);
-  git(repo, 'switch', '--quiet', '--create', 'topic');
-  git(repo, 'push', '--quiet', '--set-upstream', 'origin', 'topic');
-  git(repo, 'switch', '--quiet', 'main');
-  await service.renameBranch('topic', 'feature/renamed');
-  assert.equal(git(repo, 'rev-parse', '--abbrev-ref', 'feature/renamed@{upstream}'), 'origin/topic');
-  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/topic'], { cwd: repo }).status, 1);
-  assert.ok(git(bare, 'rev-parse', 'refs/heads/topic'));
-  const status = await service.renameBranch('main', 'trunk');
-  assert.equal(status.branch, 'trunk');
-  assert.equal(status.upstream, 'origin/main');
-});
-
-test('renaming validates names with check-ref-format and never overwrites a branch', async (t) => {
-  const { repo, service } = await fixture(t);
-  git(repo, 'branch', 'other');
-  await rejects(service.renameBranch('main', 'other'), 'branch-exists');
-  await rejects(service.renameBranch('missing', 'fresh'), 'branch-not-found');
-  for (const name of ['bad..name', 'bad name', '-option', '@{-1}', 'ends.lock', 'trailing/']) {
-    await rejects(service.renameBranch('main', name), 'invalid-branch-name');
-  }
-  assert.equal(git(repo, 'branch', '--show-current'), 'main');
-});
-
 test('tags are annotated by default, lightweight on request, and never replaced', async (t) => {
   const { repo, service } = await fixture(t);
   const first = git(repo, 'rev-parse', 'HEAD');

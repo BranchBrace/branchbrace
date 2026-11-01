@@ -1,12 +1,12 @@
 import { WIP, renderGraph } from './graph-view.js';
 import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
-import { alertDialog, askChoice, askTag, askText, confirmDialog, showMenu } from './dialogs.js';
+import { alertDialog, askChoice, askRename, askTag, askText, askWorktree, confirmDialog, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { chooseIntegration, confirmMerge } from './merge-dialog.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
-import { describeError } from './errors.js';
+import { describeCode, describeError } from './errors.js';
 import { checkOnStartup, openUpdates } from './update-dialog.js';
 
 const SUMMARY_LIMIT = 72;
@@ -281,6 +281,8 @@ const ui = {
       onOpenRemote: (remote, branch) => this.invoke(() => window.workbench.openRemote(ui.root, remote, branch)),
       loadRemoteIcon: (remote) => window.workbench.remoteIcon(ui.root, remote),
       onContextMenu: (kind, ref, x, y) => this.refMenu(kind, ref, x, y),
+      onOpenWorktree: (folder) => this.openWorktree(folder),
+      onWorktreeMenu: (worktree, x, y) => this.worktreeMenu(worktree, x, y),
     });
   },
   findRef(kind, name) { return this.refs[kind]?.find((ref) => ref.name === name); },
@@ -446,6 +448,12 @@ const ui = {
     ], x, y);
   },
   async checkout(branch) {
+    // Git n'extrait une branche que dans une seule worktree : on propose d'ouvrir celle-ci plutôt qu'un refus brut.
+    const elsewhere = this.findRef('local', branch)?.worktree;
+    if (elsewhere) {
+      if (await confirmDialog({ title: 'Branche extraite ailleurs', message: `« ${branch} » est déjà extraite dans la worktree ${elsewhere}. Git n’autorise qu’une worktree par branche : basculer ici est impossible.\n\nOuvrir cette worktree dans un onglet ?` })) await this.openWorktree(elsewhere);
+      return;
+    }
     if (await this.act(() => window.workbench.switchBranch(ui.root, branch))) { await this.reload(); this.message(`Branche courante : ${branch}.`); }
   },
   async showCommitDiff(hash, filePath) {
@@ -528,6 +536,68 @@ const ui = {
     if (!name) return;
     if (await this.act(() => window.workbench.createBranch(ui.root, name, startPoint))) { await this.reload(); this.message(`Branche « ${name} » créée.`); }
   },
+  async renameBranch(ref) {
+    const choice = await askRename({ name: ref.name, upstream: ref.upstream && !ref.gone ? ref.upstream : null });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.renameBranch(ui.root, ref.name, choice.name, choice.remote));
+    // Rechargée même après un refus : un renommage distant à moitié fait a déjà changé le nom local.
+    await this.reload();
+    if (!result) return;
+    if (result.remote?.oldBranchKept) {
+      const text = describeCode('remote-old-branch-kept');
+      this.message(text);
+      await alertDialog({ title: 'Renommage partiel', message: text });
+      return;
+    }
+    this.message(result.remote ? `Branche « ${ref.name} » renommée « ${result.branch} », aussi sur ${result.remote.name}.` : `Branche « ${ref.name} » renommée « ${result.branch} ».`);
+  },
+  // Une worktree introuvable ne s'ouvre pas (worktree-not-found) : on oriente vers « Oublier les worktrees introuvables ».
+  async openWorktree(folder) {
+    if ((this.refs.worktrees || []).some((item) => item.prunable && item.path === folder)) {
+      this.message(`La worktree ${folder} est introuvable : elle ne peut pas être ouverte.`);
+      await this.pruneWorktrees();
+      return;
+    }
+    const data = await this.act(() => window.workbench.openWorktree(ui.root, folder));
+    if (data) this.open(data, `Worktree ${repositoryName(data.root)} ouverte.`);
+  },
+  // Sans branche : demande une branche libre ou un nouveau nom ; le dossier vient ensuite du dialogue natif.
+  async createWorktree(branch = null) {
+    const free = this.refs.local.filter((ref) => !ref.current && !ref.worktree).map((ref) => ref.name);
+    const choice = branch ? { branch, newBranch: false } : await askWorktree({ branches: free, base: this.branch });
+    if (!choice) return;
+    const result = await this.act(() => window.workbench.addWorktree(ui.root, choice.branch, choice.newBranch));
+    if (!result) return;
+    await this.reload();
+    this.message(`Worktree « ${result.branch} » créée dans ${result.path}. Double-clic dessus pour l’ouvrir.`);
+  },
+  async removeWorktree(worktree) {
+    const result = await this.act(() => window.workbench.removeWorktree(ui.root, worktree.path));
+    if (!result) return;
+    // L'onglet de la worktree supprimée disparaît : ses brouillons et ses modèles d'éditeur aussi, comme à la fermeture.
+    for (const root of [worktree.path, ...this.tabs.filter((tab) => !result.tabs.includes(tab))]) {
+      this.drafts.delete(root);
+      this.editor?.forget(root);
+    }
+    this.tabs = result.tabs;
+    this.renderTabs();
+    await this.reload();
+    this.message(`Worktree ${worktree.path} supprimée${worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : ''}.`);
+  },
+  async pruneWorktrees() {
+    if (await this.act(() => window.workbench.pruneWorktrees(ui.root))) { await this.reload(); this.message('Worktrees introuvables oubliées (git worktree prune).'); }
+  },
+  worktreeMenu(worktree, x, y) {
+    const prunable = (this.refs.worktrees || []).some((item) => item.prunable);
+    showMenu([
+      ['Ouvrir dans un onglet', () => this.openWorktree(worktree.path), worktree.current || worktree.prunable],
+      ['Nouvelle worktree…', () => this.createWorktree()],
+      prunable ? ['Oublier les worktrees introuvables (prune)', () => this.pruneWorktrees()] : undefined,
+      null,
+      ['Copier le chemin', () => this.copy(worktree.path, 'Chemin copié')],
+      ['Supprimer la worktree…', () => this.removeWorktree(worktree), worktree.main || worktree.current || Boolean(worktree.locked)],
+    ], x, y);
+  },
   async cherryPick(hash) {
     const result = await this.act(() => window.workbench.cherryPick(ui.root, hash));
     if (result) { await this.reload(); this.message(`Cherry-pick terminé. Récupération conservée : ${result.recoveryRef}.`); }
@@ -548,17 +618,6 @@ const ui = {
     const result = await this.act(() => window.workbench.revert(ui.root, commit.hash, mainline));
     await this.reload();
     if (result) this.message(`Revert créé (${result.hash.slice(0, 7)}). Récupération conservée : ${result.recoveryRef}.`);
-  },
-  async renameBranch(name) {
-    const newName = await askText({
-      title: `Renommer « ${name} »`,
-      label: 'NOUVEAU NOM',
-      value: name,
-      confirmLabel: 'Renommer',
-      hint: 'L’upstream suit le renommage ; la branche distante garde son nom.',
-    });
-    if (!newName || newName === name) return;
-    if (await this.act(() => window.workbench.renameBranch(ui.root, name, newName))) { await this.reload(); this.message(`Branche « ${name} » renommée en « ${newName} ».`); }
   },
   async createTag(hash) {
     const tag = await askTag({ target: hash.slice(0, 7) });
@@ -630,7 +689,13 @@ const ui = {
   refMenu(kind, ref, x, y) {
     const isCurrent = kind === 'local' && ref.name === this.branch;
     const items = [];
-    if (kind === 'local' && !isCurrent) items.push([`Basculer sur « ${ref.name} »`, () => this.checkout(ref.name)]);
+    const worktree = kind === 'local' ? this.findRef('local', ref.name)?.worktree : null;
+    // Une worktree introuvable (dossier supprimé ou disque débranché) ne s'ouvre pas : on propose de l'oublier.
+    const missing = worktree && (this.refs.worktrees || []).some((item) => item.branch === ref.name && item.prunable);
+    if (missing) items.push([`Oublier les worktrees introuvables (dont ${repositoryName(worktree)})`, () => this.pruneWorktrees()]);
+    else if (worktree) items.push([`Ouvrir sa worktree (${repositoryName(worktree)})`, () => this.openWorktree(worktree)]);
+    else if (kind === 'local' && !isCurrent) items.push([`Basculer sur « ${ref.name} »`, () => this.checkout(ref.name)]);
+    if (kind === 'local' && !isCurrent && !worktree) items.push([`Créer une worktree pour « ${ref.name} »…`, () => this.createWorktree(ref.name)]);
     if (kind === 'remote') {
       const remote = this.findRef('remote', ref.name) || ref;
       if (remote.trackedBy) items.push([`Basculer sur « ${remote.trackedBy} » (qui la suit)`, () => this.checkout(remote.trackedBy), remote.trackedBy === this.branch]);
@@ -644,7 +709,7 @@ const ui = {
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);
     }
     if (ref.hash) items.push(['Créer une branche ici…', () => this.createBranch(ref.hash)]);
-    if (kind === 'local') items.push(['Renommer…', () => this.renameBranch(ref.name)]);
+    if (kind === 'local') items.push(['Renommer…', () => this.renameBranch(this.findRef('local', ref.name) || ref)]);
     if (kind === 'tags') for (const remote of this.refs.remotes || []) items.push([`Pousser le tag vers ${remote.name}`, () => this.pushTag(ref.name, remote.name)]);
     // Page de la branche sur GitHub/GitLab : distante elle-même, ou upstream d'une branche locale.
     const remoteRef = kind === 'remote' ? this.findRef('remote', ref.name) : kind === 'local' && ref.upstream ? this.findRef('remote', ref.upstream) : null;

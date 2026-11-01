@@ -3,7 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { GitService, GitWorkbenchError } = require('../src/git.js');
+const { GitService, GitWorkbenchError, samePath } = require('../src/git.js');
 const updates = require('../src/updates.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
@@ -272,12 +272,81 @@ Un point de récupération local sera conservé.`)) return null;
   });
   handle('repository:branches', async (_event, { root }) => service(root).branches());
   handle('repository:branch:create', async (_event, { root, name, startPoint }) => service(root).createBranch(name, startPoint || null));
+  // Renommer en local se défait en renommant à nouveau : sans confirmation. Renommer aussi sur le dépôt distant
+  // publie un nouveau nom et en supprime un : confirmation explicite, avec ce qui sera fait.
+  handle('repository:branch:rename', async (_event, { root, name, newName, remote }) => {
+    if (remote === true) {
+      const branch = (await service(root).references()).local.find((item) => item.name === name);
+      if (!branch?.upstream || branch.gone) throw new GitWorkbenchError('upstream-missing');
+      if (!await confirm('Renommer aussi la branche distante ?', `« ${name} » deviendra « ${newName} » en local et sur le dépôt distant de ${branch.upstream} :
+
+1. push de « ${newName} » (nouvelle branche distante, aucun force-push) puis vérification ;
+2. « ${newName} » suivra cette nouvelle branche distante ;
+3. suppression de ${branch.upstream} sur le serveur, seulement si elle pointe encore sur ${branch.hash.slice(0, 12)}.
+
+Les autres clones et les demandes de fusion ouvertes sur l’ancien nom ne suivront pas automatiquement.`)) return null;
+    }
+    return service(root).renameBranch(name, newName, { remote: remote === true });
+  });
+  // Worktrees : le dossier d'une nouvelle worktree est choisi ici dans le dialogue natif, jamais reçu de la page. Un
+  // dossier non vide reçoit un sous-dossier au nom de la branche.
+  handle('repository:worktree:add', async (_event, { root, branch, newBranch }) => {
+    service(root);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: `Dossier de la worktree « ${branch} »`,
+      buttonLabel: 'Créer la worktree ici',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    });
+    if (result.canceled || result.filePaths.length !== 1) return null;
+    let target = result.filePaths[0];
+    if (fs.existsSync(target) && fs.readdirSync(target).length) target = path.join(target, String(branch).replace(/[\\/:*?"<>|\s]+/g, '-'));
+    return service(root).addWorktree(target, { branch, newBranch: newBranch === true });
+  });
+  // Ouvre une worktree du dépôt dans un onglet : seules celles que Git liste pour ce dépôt sont acceptées.
+  handle('repository:worktree:open', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree || worktree.prunable || worktree.bare) throw new GitWorkbenchError('worktree-not-found');
+    const opened = [...repositories.keys()].find((key) => samePath(key, worktree.path));
+    if (opened) { writeSession(opened); return snapshot(opened); }
+    const candidate = new GitService(worktree.path);
+    const verified = await candidate.verifyRepository();
+    repositories.set(verified, candidate);
+    writeSession(verified);
+    return snapshot(verified);
+  });
+  handle('repository:worktree:remove', async (_event, { root, path: target }) => {
+    const worktree = (await service(root).worktrees()).find((item) => typeof target === 'string' && samePath(item.path, target));
+    if (!worktree) throw new GitWorkbenchError('worktree-not-found');
+    const kept = worktree.branch ? ` ; la branche « ${worktree.branch} » est conservée` : '';
+    const confirmed = worktree.prunable
+      ? await confirm('Oublier la worktree introuvable ?', `Le dossier ${worktree.path} est introuvable : Git va oublier cette seule worktree${kept}.
+
+S’il est seulement sur un disque débranché ou un partage indisponible, rebranchez-le plutôt : une fois oubliée, la worktree n’est plus reconnue par le dépôt.`)
+      : await confirm('Supprimer la worktree ?', `Le dossier ${worktree.path} sera supprimé${kept}.
+
+Git refusera s’il contient des changements non commités ou des fichiers non suivis : rien ne sera perdu.`);
+    if (!confirmed) return null;
+    const worktrees = await service(root).removeWorktree(worktree.path);
+    // Son onglet éventuel n'a plus de dépôt derrière lui.
+    for (const key of [...repositories.keys()]) if (samePath(key, worktree.path)) repositories.delete(key);
+    writeSession(root);
+    return { worktrees, tabs: [...repositories.keys()] };
+  });
+  // `git worktree prune` oublie toutes les worktrees introuvables, y compris celles d'un disque momentanément débranché.
+  handle('repository:worktree:prune', async (_event, { root }) => {
+    const missing = (await service(root).worktrees()).filter((item) => item.prunable && !item.locked);
+    if (missing.length && !await confirm('Oublier les worktrees introuvables ?', `Ces worktrees sont introuvables (dossier supprimé, déplacé ou sur un disque débranché) et ne peuvent pas être ouvertes :
+
+${missing.map((item) => `• ${item.path}${item.branch ? ` (branche « ${item.branch} », conservée)` : ''}`).join('\n')}
+
+Git va les oublier. Si l’une d’elles est seulement sur un disque débranché, rebranchez-le plutôt.`)) return null;
+    return service(root).pruneWorktrees();
+  });
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
-  // Revert, renommage et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
+  // Revert et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
   handle('repository:revert', async (_event, { root, commit, mainline }) => service(root).revert(commit, mainline ?? null));
-  handle('repository:branch:rename', async (_event, { root, name, newName }) => service(root).renameBranch(name, newName));
   handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
   handle('repository:tag:push', async (_event, { root, name, remote }) => {
     const refs = await service(root).references();

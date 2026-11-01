@@ -33,6 +33,8 @@
       "src/updates.js",
       "src/extensions.js",
       "src/grammar-catalog.js",
+      "src/sync-settings.js",
+      "src/favicon.js",
       "scripts/apply-rebase-plan.mjs",
       "node_modules/vscode-oniguruma/release/onig.wasm",
       "THIRD_PARTY_NOTICES.md",

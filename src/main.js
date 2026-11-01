@@ -1,7 +1,7 @@
 import { WIP, renderGraph } from './graph-view.js';
 import { renderCommitDetails, renderWorkingChanges } from './details-view.js';
 import { renderRefs } from './refs-view.js';
-import { alertDialog, askText, confirmDialog, showMenu } from './dialogs.js';
+import { alertDialog, askChoice, askTag, askText, confirmDialog, showMenu } from './dialogs.js';
 import { editRebasePlan } from './rebase-editor.js';
 import { composeConventional } from './conventional-dialog.js';
 import { knownScopes } from './conventional.js';
@@ -529,6 +529,43 @@ const ui = {
     const result = await this.act(() => window.workbench.cherryPick(ui.root, hash));
     if (result) { await this.reload(); this.message(`Cherry-pick terminé. Récupération conservée : ${result.recoveryRef}.`); }
   },
+  // Commit inverse ; pour un merge, l'utilisateur choisit le parent gardé. Un conflit ouvre la résolution habituelle.
+  async revert(commit) {
+    let mainline = null;
+    if (commit.parents.length > 1) {
+      const describe = (hash) => this.graph.commits.find((item) => item.hash === hash)?.subject || '';
+      mainline = await askChoice({
+        title: `Revert du merge ${commit.hash.slice(0, 7)}`,
+        message: 'Ce commit est un merge : choisissez le parent dont la version est gardée. Les changements apportés par les autres parents seront annulés.',
+        options: commit.parents.map((hash, index) => ({ value: index + 1, label: `Parent ${index + 1} · ${hash.slice(0, 7)} ${describe(hash)}` })),
+        confirmLabel: 'Revert',
+      });
+      if (!mainline) return;
+    }
+    const result = await this.act(() => window.workbench.revert(ui.root, commit.hash, mainline));
+    await this.reload();
+    if (result) this.message(`Revert créé (${result.hash.slice(0, 7)}). Récupération conservée : ${result.recoveryRef}.`);
+  },
+  async renameBranch(name) {
+    const newName = await askText({
+      title: `Renommer « ${name} »`,
+      label: 'NOUVEAU NOM',
+      value: name,
+      confirmLabel: 'Renommer',
+      hint: 'L’upstream suit le renommage ; la branche distante garde son nom.',
+    });
+    if (!newName || newName === name) return;
+    if (await this.act(() => window.workbench.renameBranch(ui.root, name, newName))) { await this.reload(); this.message(`Branche « ${name} » renommée en « ${newName} ».`); }
+  },
+  async createTag(hash) {
+    const tag = await askTag({ target: hash.slice(0, 7) });
+    if (!tag) return;
+    if (await this.act(() => window.workbench.createTag(ui.root, tag.name, hash, tag))) { await this.reload(); this.message(`Tag ${tag.annotated ? 'annoté' : 'léger'} « ${tag.name} » créé.`); }
+  },
+  async pushTag(name, remote) {
+    const result = await this.act(() => window.workbench.pushTag(ui.root, name, remote));
+    if (result) this.message(`Tag « ${name} » poussé vers ${remote} (${result.hash.slice(0, 12)}).`);
+  },
   async rebase(onto) {
     const result = await this.act(() => window.workbench.rebase(ui.root, onto));
     if (result) { await this.reload(); this.message(`Rebase terminé. Récupération conservée : ${result.recoveryRef}.`); }
@@ -552,6 +589,8 @@ const ui = {
     showMenu([
       ['Créer une branche ici…', () => this.createBranch(commit.hash)],
       ['Cherry-pick ce commit', () => this.cherryPick(commit.hash)],
+      [commit.parents.length > 1 ? 'Revert ce merge…' : 'Revert ce commit', () => this.revert(commit)],
+      ['Créer un tag ici…', () => this.createTag(commit.hash)],
       [`Rebaser « ${this.branch} » sur ${short}`, () => this.rebase(commit.hash)],
       [`Rebase interactif de « ${this.branch} » depuis ${short}…`, () => this.interactiveRebase(commit.hash, short)],
       null,
@@ -574,6 +613,8 @@ const ui = {
       items.push([`Rebase interactif de « ${this.branch} » sur « ${ref.name} »…`, () => this.interactiveRebase(ref.name, ref.name)]);
     }
     if (ref.hash) items.push(['Créer une branche ici…', () => this.createBranch(ref.hash)]);
+    if (kind === 'local') items.push(['Renommer…', () => this.renameBranch(ref.name)]);
+    if (kind === 'tags') for (const remote of this.refs.remotes || []) items.push([`Pousser le tag vers ${remote.name}`, () => this.pushTag(ref.name, remote.name)]);
     // Page de la branche sur GitHub/GitLab : distante elle-même, ou upstream d'une branche locale.
     const remoteRef = kind === 'remote' ? this.findRef('remote', ref.name) : kind === 'local' && ref.upstream ? this.findRef('remote', ref.upstream) : null;
     const site = remoteRef && (this.refs.remotes || []).find((item) => item.name === remoteRef.remote && item.web);

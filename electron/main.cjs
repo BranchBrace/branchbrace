@@ -275,6 +275,17 @@ Un point de récupération local sera conservé.`)) return null;
   // Git refuse lui-même de basculer si cela risque d'écraser des changements locaux.
   handle('repository:branch:switch', async (_event, { root, name }) => service(root).switchBranch(name));
   handle('repository:cherry-pick', async (_event, { root, commit }) => service(root).cherryPick(commit));
+  // Revert, renommage et création de tag ajoutent un commit ou une ref sans rien réécrire : sans confirmation.
+  handle('repository:revert', async (_event, { root, commit, mainline }) => service(root).revert(commit, mainline ?? null));
+  handle('repository:branch:rename', async (_event, { root, name, newName }) => service(root).renameBranch(name, newName));
+  handle('repository:tag:create', async (_event, { root, name, commit, annotated, message }) => service(root).createTag(name, commit, { annotated: annotated !== false, message }));
+  handle('repository:tag:push', async (_event, { root, name, remote }) => {
+    const refs = await service(root).references();
+    if (!refs.tags.some((tag) => tag.name === name)) throw new GitWorkbenchError('tag-not-found');
+    if (!refs.remotes.some((item) => item.name === remote)) throw new GitWorkbenchError('remote-not-found');
+    if (!await confirm('Pousser le tag ?', `Git va pousser le seul tag « ${name} » vers ${remote} (refs/tags/${name}). Les autres tags locaux ne sont pas envoyés.`)) return null;
+    return service(root).pushTag(name, remote);
+  });
   handle('repository:rebase', async (_event, { root, upstream }) => {
     await service(root).assertClean();
     const { upstream: resolvedBase, commits } = await service(root).interactiveRebaseCommits(upstream);

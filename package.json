@@ -15,7 +15,7 @@
     "test": "vite build && node --test",
     "build": "vite build && electron-builder --dir",
     "package:linux": "vite build && electron-builder --linux deb --x64",
-    "package:win": "vite build && electron-builder --win nsis --x64",
+    "package:win": "vite build && electron-builder --win nsis portable --x64",
     "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
     "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
   },
@@ -81,6 +81,12 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "signtoolOptions": {
@@ -97,6 +103,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
     }
   },
   "devDependencies": {

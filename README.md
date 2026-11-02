@@ -95,6 +95,10 @@ BranchBrace a besoin de [Git](https://git-scm.com/downloads) installé et access
 
 3. Lancez l'installateur. Il s'installe pour l'utilisateur courant, sans droits administrateur, et vous laisse choisir le dossier.
 
+#### Version portable, sans installation
+
+La même release publie `BranchBrace-<version>-portable.exe` (avec son `.sha256`). Il se lance directement, depuis n'importe quel dossier ou une clé USB, sans rien installer. Ses données (session, réglages, extensions importées) sont rangées dans un dossier `BranchBrace-data` créé à côté de l'exécutable : rien n'est écrit dans le profil Windows. La version portable ne se met pas à jour seule : « Mises à jour… » ouvre la page de la release, où télécharger le nouvel exécutable.
+
 ### Linux et macOS
 
 Aucun paquet n'est encore publié pour ces systèmes. Vous pouvez construire l'application vous-même (voir [Développement](#développement)) : `npm run package:linux` produit un paquet `.deb` pour Linux x64.
@@ -145,7 +149,7 @@ npm run dev
 | `npm run typecheck` | Vérification des invariants du projet |
 | `npm test` | Build Vite puis tests d'intégration sur des dépôts Git temporaires |
 | `npm run build` | Application non empaquetée dans `artifacts/` |
-| `npm run package:win` | Installateur Windows (NSIS) |
+| `npm run package:win` | Installateur Windows (NSIS) et exécutable portable |
 | `npm run package:linux` | Paquet `.deb` Linux x64 |
 
 L'interface est en JavaScript sans framework (`src/`), le processus principal Electron dans `electron/`. Tous les appels Git passent par `src/git.js`. La spécification fonctionnelle est dans [`docs/MVP.md`](docs/MVP.md) et le vocabulaire du domaine dans [`CONTEXT.md`](CONTEXT.md).

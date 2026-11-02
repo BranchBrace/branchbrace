@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the Windows x64 NSIS installer using a public Docker image bundling Wine.
+# Build the Windows x64 NSIS installer and portable executable using a public Docker image bundling Wine.
 # electron-builder cannot invoke NSIS without wine (`spawn wine ENOENT`), which this
 # Linux host/CI runner lacks natively. No paid service, no Windows host, no new
 # external dependency: electronuserland/builder:wine is a public, free Docker Hub image.
@@ -49,7 +49,7 @@ else
   set --
 fi
 
-echo "Building Windows x64 installer v$version with $image"
+echo "Building Windows x64 installer and portable v$version with $image"
 docker run --rm \
   -v "$PWD:/project" \
   -w /project \
@@ -59,10 +59,13 @@ docker run --rm \
   "$image" \
   sh -c "${signing_setup}npm ci && npm run package:win -- -c.extraMetadata.version=$version${signing_check}; status=\$?; chown -R $host_uid:$host_gid artifacts .cache 2>/dev/null; exit \$status"
 
-exe=$(ls artifacts/*.exe 2>/dev/null | head -n 1 || true)
-if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-  echo "No .exe produced in artifacts/" >&2
-  exit 1
-fi
-sha256sum "$exe" | tee "$exe.sha256"
-echo "Windows installer: $exe"
+# One installer (NSIS) and one portable build (no installation): each gets its own published checksum.
+for kind in Setup portable; do
+  exe=$(ls artifacts/*"$kind"*.exe 2>/dev/null | head -n 1 || true)
+  if [ -z "$exe" ] || [ ! -f "$exe" ]; then
+    echo "No $kind .exe produced in artifacts/" >&2
+    exit 1
+  fi
+  sha256sum "$exe" | tee "$exe.sha256"
+  echo "Windows $kind: $exe"
+done

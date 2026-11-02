@@ -9,11 +9,16 @@ const extensions = require('../src/extensions.js');
 const syncSettings = require('../src/sync-settings.js');
 const { fetchFavicon } = require('../src/favicon.js');
 
+// Version portable (cible electron-builder « portable ») : les données vivent à côté de l'exécutable, rien n'est
+// écrit dans le profil Windows et rien n'est repris de l'ancien nom.
+const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+if (portableDir) app.setPath('userData', path.join(portableDir, 'BranchBrace-data'));
+
 // Données de l'ancien nom (session, réglages, extensions importées) : reprises une fois, au premier lancement sous
 // BranchBrace, avant toute lecture. L'ancien dossier est laissé en place.
 try {
   const legacyUserData = path.join(app.getPath('appData'), 'Git Workbench'); // ancien nom
-  if (!fs.existsSync(app.getPath('userData')) && fs.existsSync(legacyUserData)) {
+  if (!portableDir && !fs.existsSync(app.getPath('userData')) && fs.existsSync(legacyUserData)) {
     fs.cpSync(legacyUserData, app.getPath('userData'), { recursive: true, filter: (source) => !/[\\/](Cache|Code Cache|GPUCache|Crashpad)$/.test(source) });
   }
 } catch (error) {
@@ -488,7 +493,7 @@ Un point de récupération local sera conservé ; « Annuler » revient à l’�
   handle('updates:settings', async () => ({
     ...(await updates.readUpdateSettings(updateSettingsFile(), app.getVersion())),
     current: app.getVersion(),
-    installable: process.platform === 'win32' && app.isPackaged,
+    installable: process.platform === 'win32' && app.isPackaged && !portableDir,
   }));
   handle('updates:settings:set', async (_event, changes) => updates.writeUpdateSettings(updateSettingsFile(), app.getVersion(), changes));
   handle('updates:check', async (_event, { channel } = {}) => {
@@ -499,7 +504,7 @@ Un point de récupération local sera conservé ; « Annuler » revient à l’�
   handle('updates:install', async () => {
     const latest = lastUpdateCheck?.available ? lastUpdateCheck.latest : null;
     if (!latest) throw new BranchBraceError('update-not-available');
-    if (!latest.installer || !app.isPackaged) {
+    if (!latest.installer || !app.isPackaged || portableDir) {
       await shell.openExternal(latest.page);
       return { opened: latest.page };
     }

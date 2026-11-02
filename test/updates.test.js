@@ -87,6 +87,18 @@ test('installer assets hosted outside the project releases are never offered', a
   assert.equal(result.latest.installer, null);
 });
 
+test('the portable executable published next to the installer is never taken for it', async () => {
+  const both = release('v1.2.0', false);
+  const portable = 'BranchBrace-1.2.0-portable.exe';
+  both.assets.unshift(
+    { name: portable, size: 4, browser_download_url: `${DOWNLOADS}/v1.2.0/${portable}` },
+    { name: `${portable}.sha256`, size: 100, browser_download_url: `${DOWNLOADS}/v1.2.0/${portable}.sha256` },
+  );
+  const fetch = respond({ 'https://api.github.com/repos/BranchBrace/branchbrace/releases?per_page=50': [both] });
+  const result = await checkForUpdate({ currentVersion: '1.0.0', channel: 'stable', platform: 'win32', fetch });
+  assert.equal(result.latest.installer.name, 'BranchBrace.Setup.1.2.0.exe');
+});
+
 test('a GitHub outage is reported as an update check failure', async () => {
   const fetch = async () => { throw new TypeError('fetch failed'); };
   await assert.rejects(checkForUpdate({ currentVersion: '1.0.0', channel: 'stable', fetch }), { code: 'update-check-failed' });

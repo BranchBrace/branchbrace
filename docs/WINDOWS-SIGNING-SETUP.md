@@ -38,12 +38,23 @@ validation d'identité (étape 4). Les étapes 6 et 7 peuvent se faire pendant c
    | Subscription | l'abonnement de l'étape 1 |
    | Resource group | **Create new** → `branchbrace-signing` |
    | Account name | ex. `branchbrace` (3 à 24 caractères, commence par une lettre, unique au monde) |
-   | Region | **West Europe** |
+   | Region | **North Europe** (sinon **Poland Central**) |
    | Pricing | **Basic** (~9,99 $/mois, 5 000 signatures) |
 
 3. **Review + Create** → **Create** → **Go to resource**.
 
-Noter le nom du compte : il sert à l'étape 8.
+Noter le nom du compte et la région : ils servent à l'étape 8.
+
+La région n'a d'effet ni sur le certificat ni sur la validation d'identité. West Europe refuse les
+nouveaux clients (`RequestDisallowedByAzure` : « The selected region is currently not accepting
+new customers ») : dans ce cas, prendre une autre région européenne.
+
+| Région | Endpoint (étape 8) |
+|---|---|
+| North Europe | `neu.codesigning.azure.net` |
+| Poland Central | `plc.codesigning.azure.net` |
+| Switzerland North | `swn.codesigning.azure.net` |
+| West Europe | `weu.codesigning.azure.net` |
 
 ## 4. Validation d'identité de l'entité
 
@@ -144,7 +155,7 @@ Sur GitHub : dépôt `BranchBrace/branchbrace` → **Settings** → **Secrets an
 
 | Variable | Valeur |
 |---|---|
-| `WINDOWS_SIGNING_ENDPOINT` | `weu.codesigning.azure.net` |
+| `WINDOWS_SIGNING_ENDPOINT` | endpoint de la région de l'étape 3, ex. `neu.codesigning.azure.net` |
 | `WINDOWS_SIGNING_ALIAS` | `<nom du compte>/<nom du profil>`, ex. `branchbrace/branchbrace-release` |
 | `WINDOWS_SIGNING_PUBLISHER` | le CN noté à l'étape 4b, sans `CN=` |
 | `AZURE_TENANT_ID` | noté à l'étape 6 |
@@ -156,7 +167,7 @@ qu'elle existe, une release non signée fait échouer la CI.
 Les variables peuvent aussi être créées en ligne de commande :
 
 ```bash
-gh variable set WINDOWS_SIGNING_ENDPOINT -R BranchBrace/branchbrace --body "weu.codesigning.azure.net"
+gh variable set WINDOWS_SIGNING_ENDPOINT -R BranchBrace/branchbrace --body "neu.codesigning.azure.net"
 ```
 
 ## 9. Vérifier

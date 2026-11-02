@@ -46,6 +46,9 @@ Mise en œuvre, compatible avec le build Linux + Wine de l'ADR 0003 :
 
 ## Activation — étapes côté Antoine (portail Azure, non automatisables)
 
+Guide détaillé, écran par écran : [WINDOWS-SIGNING-SETUP.md](../WINDOWS-SIGNING-SETUP.md).
+L'instruction de la validation d'identité prend de 1 à 20 jours ouvrés selon Microsoft.
+
 1. Abonnement Azure payant, puis enregistrer le fournisseur de ressources
    `Microsoft.CodeSigning`.
 2. Créer un compte **Artifact Signing**, offre Basic, région West Europe

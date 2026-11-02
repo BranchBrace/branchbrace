@@ -1,3 +1,10 @@
+# [1.1.0-rc.12](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.11...v1.1.0-rc.12) (2026-11-02)
+
+
+### Bug Fixes
+
+* **securite:** corriger les vulnérabilités high/critical des dépendances ([0af341e](https://github.com/BranchBrace/branchbrace/commit/0af341e7f357caeb737f7dd9207e81ea4f882be9))
+
 # [1.1.0-rc.11](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.10...v1.1.0-rc.11) (2026-11-02)
 
 

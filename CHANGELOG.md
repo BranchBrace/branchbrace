@@ -1,3 +1,10 @@
+# [1.1.0-rc.11](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.10...v1.1.0-rc.11) (2026-11-02)
+
+
+### Features
+
+* **windows:** publier une version portable sans installateur ([46ff4bc](https://github.com/BranchBrace/branchbrace/commit/46ff4bc4436a363c4d142cced24cd4744ae50e44))
+
 # [1.1.0-rc.10](https://github.com/BranchBrace/branchbrace/compare/v1.1.0-rc.9...v1.1.0-rc.10) (2026-11-01)
 
 

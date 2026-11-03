@@ -57,5 +57,5 @@ Remarque : un certificat **EV** supprime en général l'avertissement SmartScree
 
 - Seul l'installateur NSIS Windows x64 est construit et vérifié statiquement ici ; le smoke d'installation/lancement/désinstallation réel reste à faire par Antoine sur son poste physique.
 - L'installateur n'est pas signé : Windows SmartScreen affichera un avertissement « Éditeur inconnu » à la première exécution. Normal et attendu pour une RC non signée.
-- La release Windows passe désormais par la pipeline `semantic-release` existante (asset GitHub Release), contrairement au `.deb` Linux qui reste une livraison privée hors pipeline (ADR 0002). Cette différence est intentionnelle, en réponse à la décision explicite d'Antoine sur ce canal de remise.
+- La release Windows passe désormais par la pipeline `semantic-release` existante (asset GitHub Release), comme le `.deb` Linux depuis le 2026-11-03 (ADR 0002, Évolution).
 - Build et vérification statique uniquement vérifiés dans ce conteneur Docker Ubuntu 22.04 + Wine 11.0 ; aucun autre environnement de build n'est annoncé.

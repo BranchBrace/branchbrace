@@ -7,15 +7,16 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "out/electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && electron .\"",
-    "lint": "node scripts/lint.mjs",
-    "typecheck": "node scripts/typecheck.mjs",
-    "test": "vite build && node --test",
-    "build": "vite build && electron-builder --dir",
-    "package:linux": "vite build && electron-builder --linux deb --x64",
-    "package:win": "vite build && electron-builder --win nsis portable --x64",
+    "dev": "tsc -p tsconfig.main.json && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && electron .\"",
+    "build:app": "vite build && tsc -p tsconfig.main.json",
+    "lint": "node scripts/lint.mts",
+    "typecheck": "node scripts/typecheck.mts",
+    "test": "vite build && node --test \"test/*.test.ts\"",
+    "build": "npm run build:app && electron-builder --dir",
+    "package:linux": "npm run build:app && electron-builder --linux deb --x64",
+    "package:win": "npm run build:app && electron-builder --win nsis portable --x64",
     "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
     "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
   },
@@ -27,15 +28,9 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*",
-      "src/git.js",
-      "src/partial-staging.js",
-      "src/updates.js",
-      "src/extensions.js",
-      "src/grammar-catalog.js",
-      "src/sync-settings.js",
-      "src/favicon.js",
-      "scripts/apply-rebase-plan.mjs",
+      "out/electron/**/*",
+      "out/src/**/*",
+      "out/scripts/apply-rebase-plan.mjs",
       "node_modules/vscode-oniguruma/release/onig.wasm",
       "THIRD_PARTY_NOTICES.md",
       "package.json"
@@ -90,7 +85,7 @@
         }
       ],
       "signtoolOptions": {
-        "sign": "./scripts/sign-windows.cjs",
+        "sign": "./out/scripts/sign-windows.cjs",
         "signingHashAlgorithms": [
           "sha256"
         ]
@@ -109,10 +104,12 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "concurrently": "^9.2.1",
     "electron": "^45.2.1",
     "electron-builder": "^26.0.12",
     "monaco-editor": "0.57.0",
+    "typescript": "^5.9.3",
     "vite": "^7.2.2",
     "vscode-textmate": "9.3.2",
     "wait-on": "^8.0.4"

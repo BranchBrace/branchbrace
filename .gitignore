@@ -36,3 +36,6 @@ reports/
 
 # Fichiers locaux de session Claude Code (configuration de prévisualisation, réglages, hooks) : jamais versionnés
 .claude/
+
+# Processus principal compilé (tsc -p tsconfig.main.json)
+out/

@@ -22,7 +22,7 @@ docker run --rm \
   -e ELECTRON_CACHE=/root/.cache/electron \
   -e ELECTRON_BUILDER_CACHE=/root/.cache/electron-builder \
   "$image" \
-  sh -c "npm ci && npm run package:linux -- -c.extraMetadata.version=$version; status=\$?; chown -R $host_uid:$host_gid artifacts node_modules dist 2>/dev/null; exit \$status"
+  sh -c "npm ci && npm run package:linux -- -c.extraMetadata.version=$version; status=\$?; chown -R $host_uid:$host_gid artifacts node_modules dist out 2>/dev/null; exit \$status"
 
 deb=$(ls artifacts/*.deb 2>/dev/null | head -n 1 || true)
 if [ -z "$deb" ] || [ ! -f "$deb" ]; then

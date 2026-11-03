@@ -46,10 +46,13 @@ Mise en œuvre, compatible avec le build Linux + Wine de l'ADR 0003 :
 
 ## Activation — étapes côté Antoine (portail Azure, non automatisables)
 
+Guide détaillé, écran par écran : [WINDOWS-SIGNING-SETUP.md](../WINDOWS-SIGNING-SETUP.md).
+L'instruction de la validation d'identité prend de 1 à 20 jours ouvrés selon Microsoft.
+
 1. Abonnement Azure payant, puis enregistrer le fournisseur de ressources
    `Microsoft.CodeSigning`.
-2. Créer un compte **Artifact Signing**, offre Basic, région West Europe
-   (point de terminaison `weu.codesigning.azure.net`).
+2. Créer un compte **Artifact Signing**, offre Basic, région North Europe
+   (point de terminaison `neu.codesigning.azure.net` ; West Europe refuse les nouveaux clients).
 3. Se donner le rôle **Artifact Signing Identity Verifier**, puis créer une **validation
    d'identité « Organization », Public Trust** avec les documents de l'entité (SIREN). Attendre
    l'approbation.
@@ -62,7 +65,7 @@ Mise en œuvre, compatible avec le build Linux + Wine de l'ADR 0003 :
 
 | Variable | Valeur |
 |---|---|
-| `WINDOWS_SIGNING_ENDPOINT` | `weu.codesigning.azure.net` |
+| `WINDOWS_SIGNING_ENDPOINT` | `neu.codesigning.azure.net` (endpoint de la région du compte) |
 | `WINDOWS_SIGNING_ALIAS` | `<nom du compte>/<nom du profil>` |
 | `WINDOWS_SIGNING_PUBLISHER` | CN exact du certificat (nom légal validé de l'entité) |
 | `AZURE_TENANT_ID` | identifiant du tenant |

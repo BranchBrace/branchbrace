@@ -15,7 +15,7 @@
     "test": "vite build && node --test",
     "build": "vite build && electron-builder --dir",
     "package:linux": "vite build && electron-builder --linux deb --x64",
-    "package:win": "vite build && electron-builder --win nsis --x64",
+    "package:win": "vite build && electron-builder --win nsis portable --x64",
     "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
     "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
   },
@@ -81,6 +81,12 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "signtoolOptions": {
@@ -97,11 +103,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
     }
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "electron": "^39.2.7",
+    "electron": "^45.2.1",
     "electron-builder": "^26.0.12",
     "monaco-editor": "0.57.0",
     "vite": "^7.2.2",
@@ -114,5 +123,8 @@
   },
   "dependencies": {
     "vscode-oniguruma": "2.0.1"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }

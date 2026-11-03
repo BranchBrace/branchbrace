@@ -55,11 +55,11 @@ export function selectRelease(releases, channel) {
 }
 
 // Installateur téléchargeable pour cette plateforme et son empreinte publiée. Seul Windows en a un : ailleurs,
-// la mise à jour passe par la page de la release.
+// la mise à jour passe par la page de la release. L'exécutable portable publié à côté n'est pas un installateur.
 function installerOf(release, platform) {
   if (platform !== 'win32') return null;
   const assets = Array.isArray(release.assets) ? release.assets : [];
-  const installer = assets.find((asset) => /\.exe$/i.test(asset.name) && String(asset.browser_download_url).startsWith(DOWNLOADS));
+  const installer = assets.find((asset) => /setup.*\.exe$/i.test(asset.name) && String(asset.browser_download_url).startsWith(DOWNLOADS));
   const checksum = installer && assets.find((asset) => asset.name === `${installer.name}.sha256` && String(asset.browser_download_url).startsWith(DOWNLOADS));
   return checksum ? { name: installer.name, url: installer.browser_download_url, size: installer.size, checksumUrl: checksum.browser_download_url } : null;
 }

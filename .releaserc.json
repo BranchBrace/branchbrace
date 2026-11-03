@@ -10,8 +10,10 @@
     }],
     ["@semantic-release/github", {
       "assets": [
-        {"path": "artifacts/*.exe", "label": "BranchBrace Setup (Windows x64)"},
-        {"path": "artifacts/*.exe.sha256", "label": "SHA-256 (Windows x64 installer)"}
+        {"path": "artifacts/*Setup*.exe", "label": "BranchBrace Setup (Windows x64)"},
+        {"path": "artifacts/*Setup*.exe.sha256", "label": "SHA-256 (Windows x64 installer)"},
+        {"path": "artifacts/*-portable.exe", "label": "BranchBrace portable (Windows x64, sans installation)"},
+        {"path": "artifacts/*-portable.exe.sha256", "label": "SHA-256 (Windows x64 portable)"}
       ]
     }],
     ["@semantic-release/git", {"assets": ["CHANGELOG.md"], "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"}]

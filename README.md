@@ -118,7 +118,7 @@ Menu ☰ › « Mises à jour… ». Le canal **Stable** suit les versions publi
 Pour essayer sans risque, créez un dépôt de démonstration (plusieurs auteurs, merges, branches distantes, une branche à rebaser, une branche en conflit) :
 
 ```bash
-node scripts/create-sandbox.mjs ~/branchbrace-sandbox
+node scripts/create-sandbox.mts ~/branchbrace-sandbox
 ```
 
 Les captures de ce README ont été prises sur ce dépôt.
@@ -133,7 +133,7 @@ Les captures de ce README ont été prises sur ce dépôt.
 
 ## Développement
 
-Prérequis : Node.js 22 ou plus récent, npm et Git.
+Prérequis : Node.js 22.18 ou plus récent (exécution directe du TypeScript), npm et Git.
 
 ```bash
 git clone https://github.com/BranchBrace/branchbrace.git
@@ -145,14 +145,14 @@ npm run dev
 | Script | Rôle |
 | --- | --- |
 | `npm run dev` | Vite et Electron en mode développement |
-| `npm run lint` | Lint des sources |
-| `npm run typecheck` | Vérification des invariants du projet |
+| `npm run lint` | Sources entièrement en TypeScript, exécutables par Node sans compilation |
+| `npm run typecheck` | Vérification stricte des types (`tsc`) et des invariants du projet |
 | `npm test` | Build Vite puis tests d'intégration sur des dépôts Git temporaires |
 | `npm run build` | Application non empaquetée dans `artifacts/` |
 | `npm run package:win` | Installateur Windows (NSIS) et exécutable portable |
 | `npm run package:linux` | Paquet `.deb` Linux x64 |
 
-L'interface est en JavaScript sans framework (`src/`), le processus principal Electron dans `electron/`. Tous les appels Git passent par `src/git.js`. La spécification fonctionnelle est dans [`docs/MVP.md`](docs/MVP.md) et le vocabulaire du domaine dans [`CONTEXT.md`](CONTEXT.md).
+L’interface est en TypeScript sans framework (`src/`, compilée par Vite), le processus principal Electron dans `electron/` (compilé dans `out/` par `tsc -p tsconfig.main.json`). Tous les appels Git passent par `src/git.ts`. La spécification fonctionnelle est dans [`docs/MVP.md`](docs/MVP.md) et le vocabulaire du domaine dans [`CONTEXT.md`](CONTEXT.md).
 
 ## Contribuer
 

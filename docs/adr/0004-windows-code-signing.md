@@ -72,7 +72,7 @@ La release suivante sur `rc` sera signée.
 
 ## Vérification réalisée
 
-- Tests unitaires `test/windows-signing.test.js` : hook câblé, arguments jsign, échec si la
+- Tests unitaires `test/windows-signing.test.ts` : hook câblé, arguments jsign, échec si la
   signature est exigée mais non configurée, téléchargement épinglé et vérifié.
 - Build de bout en bout dans le conteneur Wine avec un keystore PKCS#12 auto-signé
   (`WINDOWS_SIGNING_STORETYPE=PKCS12`) : chemin de signature et de vérification exercé.

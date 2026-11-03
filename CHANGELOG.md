@@ -1,3 +1,16 @@
+# [1.2.0-rc.1](https://github.com/BranchBrace/branchbrace/compare/v1.1.0...v1.2.0-rc.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **dev:** charger vscode-textmate et vscode-oniguruma sous Vite en développement ([6eefdbd](https://github.com/BranchBrace/branchbrace/commit/6eefdbd1c5fef7492ea32798b2ff99a7e4263933))
+* **securite:** corriger les vulnérabilités high/critical des dépendances ([0af341e](https://github.com/BranchBrace/branchbrace/commit/0af341e7f357caeb737f7dd9207e81ea4f882be9))
+
+
+### Features
+
+* **windows:** publier une version portable sans installateur ([46ff4bc](https://github.com/BranchBrace/branchbrace/commit/46ff4bc4436a363c4d142cced24cd4744ae50e44))
+
 # [1.1.0](https://github.com/BranchBrace/branchbrace/compare/v1.0.0...v1.1.0) (2026-11-01)
 
 

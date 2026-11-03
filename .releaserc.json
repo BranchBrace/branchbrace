@@ -5,7 +5,7 @@
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
     ["@semantic-release/exec", {
-      "prepareCmd": "./scripts/package-windows-release.sh ${nextRelease.version}",
+      "prepareCmd": "./scripts/package-linux-release.sh ${nextRelease.version} && ./scripts/package-windows-release.sh ${nextRelease.version}",
       "publishCmd": "./scripts/release-images.sh ${nextRelease.version}"
     }],
     ["@semantic-release/github", {
@@ -13,7 +13,9 @@
         {"path": "artifacts/*Setup*.exe", "label": "BranchBrace Setup (Windows x64)"},
         {"path": "artifacts/*Setup*.exe.sha256", "label": "SHA-256 (Windows x64 installer)"},
         {"path": "artifacts/*-portable.exe", "label": "BranchBrace portable (Windows x64, sans installation)"},
-        {"path": "artifacts/*-portable.exe.sha256", "label": "SHA-256 (Windows x64 portable)"}
+        {"path": "artifacts/*-portable.exe.sha256", "label": "SHA-256 (Windows x64 portable)"},
+        {"path": "artifacts/*.deb", "label": "BranchBrace (Linux x64, paquet .deb)"},
+        {"path": "artifacts/*.deb.sha256", "label": "SHA-256 (Linux x64 .deb)"}
       ]
     }],
     ["@semantic-release/git", {"assets": ["CHANGELOG.md"], "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"}]

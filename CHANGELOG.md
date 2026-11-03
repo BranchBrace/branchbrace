@@ -1,3 +1,10 @@
+# [1.2.0-rc.2](https://github.com/BranchBrace/branchbrace/compare/v1.2.0-rc.1...v1.2.0-rc.2) (2026-11-03)
+
+
+### Features
+
+* **release:** publier le paquet .deb Linux x64 avec chaque release ([ef0f554](https://github.com/BranchBrace/branchbrace/commit/ef0f554d18c6f85ed30ae77e0df703afc97b4d0e))
+
 # [1.2.0-rc.1](https://github.com/BranchBrace/branchbrace/compare/v1.1.0...v1.2.0-rc.1) (2026-11-03)
 
 

@@ -99,9 +99,20 @@ BranchBrace a besoin de [Git](https://git-scm.com/downloads) installé et access
 
 La même release publie `BranchBrace-<version>-portable.exe` (avec son `.sha256`). Il se lance directement, depuis n'importe quel dossier ou une clé USB, sans rien installer. Ses données (session, réglages, extensions importées) sont rangées dans un dossier `BranchBrace-data` créé à côté de l'exécutable : rien n'est écrit dans le profil Windows. La version portable ne se met pas à jour seule : « Mises à jour… » ouvre la page de la release, où télécharger le nouvel exécutable.
 
-### Linux et macOS
+### Linux
 
-Aucun paquet n'est encore publié pour ces systèmes. Vous pouvez construire l'application vous-même (voir [Développement](#développement)) : `npm run package:linux` produit un paquet `.deb` pour Linux x64.
+Chaque release publie `branchbrace_<version>_amd64.deb` (Linux x64) avec son `.sha256`. Vérifiez la somme, puis installez avec apt, qui tire les dépendances (dont `git`) :
+
+```bash
+sha256sum -c branchbrace_<version>_amd64.deb.sha256
+sudo apt install ./branchbrace_<version>_amd64.deb
+```
+
+L'application s'installe dans `/opt/BranchBrace`, avec le lanceur `branchbrace` et une entrée dans le menu des applications. `sudo apt purge branchbrace` la désinstalle. Le paquet n'est pas signé et n'est publié sur aucun dépôt APT : il ne se met pas à jour avec le système.
+
+### macOS
+
+Aucun paquet n'est encore publié. Vous pouvez construire l'application vous-même (voir [Développement](#développement)).
 
 Les plateformes effectivement testées sont listées dans [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
 

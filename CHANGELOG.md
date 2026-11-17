@@ -1,3 +1,18 @@
+# [1.2.0](https://github.com/BranchBrace/branchbrace/compare/v1.1.0...v1.2.0) (2026-11-17)
+
+
+### Bug Fixes
+
+* **dev:** charger vscode-textmate et vscode-oniguruma sous Vite en développement ([6eefdbd](https://github.com/BranchBrace/branchbrace/commit/6eefdbd1c5fef7492ea32798b2ff99a7e4263933))
+* **securite:** corriger les vulnérabilités high/critical des dépendances ([0af341e](https://github.com/BranchBrace/branchbrace/commit/0af341e7f357caeb737f7dd9207e81ea4f882be9))
+
+
+### Features
+
+* publier BranchBrace sur le Microsoft Store en MSIX ([d21e83d](https://github.com/BranchBrace/branchbrace/commit/d21e83ddb2b8bb7a2c319a26917aabba28e7a840))
+* **release:** publier le paquet .deb Linux x64 avec chaque release ([ef0f554](https://github.com/BranchBrace/branchbrace/commit/ef0f554d18c6f85ed30ae77e0df703afc97b4d0e))
+* **windows:** publier une version portable sans installateur ([46ff4bc](https://github.com/BranchBrace/branchbrace/commit/46ff4bc4436a363c4d142cced24cd4744ae50e44))
+
 # [1.2.0-rc.3](https://github.com/BranchBrace/branchbrace/compare/v1.2.0-rc.2...v1.2.0-rc.3) (2026-11-17)
 
 

@@ -12,6 +12,7 @@ window.workbench.onUpdateProgress((progress) => showProgress(progress));
 // enregistré aussitôt ; la recherche n'a lieu que sur clic (ou, à l'ouverture, si `check` est vrai).
 export async function openUpdates({ check = false, onResult = () => {} }: { check?: boolean; onResult?: (found: UpdateCheck) => void } = {}): Promise<true | null> {
   const settings = await window.workbench.updateSettings();
+  if (settings.store) return storeUpdates(settings.current);
 
   const channel = element('select');
   for (const [value, label] of Object.entries(CHANNEL_LABELS)) {
@@ -87,12 +88,26 @@ export async function openUpdates({ check = false, onResult = () => {} }: { chec
   return modal('Mises à jour', [channelField, startupLabel, row, result, hint], { confirmLabel: 'Fermer', cancelLabel: null, collect: () => true });
 }
 
+// Version installée depuis le Microsoft Store : pas de canal ni de recherche sur GitHub, le Store livre les mises à jour.
+function storeUpdates(current: string): Promise<true | null> {
+  const result = element('div', 'update-result', `Version installée : ${current}`);
+  const open = element('button', 'button secondary', 'Ouvrir dans le Microsoft Store');
+  open.type = 'button';
+  open.addEventListener('click', () => {
+    window.workbench.installUpdate().catch((error: unknown) => { result.className = 'update-result error'; result.textContent = describeError(error); });
+  });
+  const row = element('div', 'update-actions');
+  row.append(open);
+  const hint = element('p', 'dialog-hint', 'BranchBrace a été installé depuis le Microsoft Store : ses mises à jour sont téléchargées et installées par le Store.');
+  return modal('Mises à jour', [result, row, hint], { confirmLabel: 'Fermer', cancelLabel: null, collect: () => true });
+}
+
 // Vérification silencieuse au démarrage, seulement si l'utilisateur l'a activée. Un échec (hors ligne…) est ignoré.
 export async function checkOnStartup(): Promise<UpdateCheck | null> {
 
   try {
     const settings = await window.workbench.updateSettings();
-    if (!settings.checkOnStartup) return null;
+    if (settings.store || !settings.checkOnStartup) return null;
     return await window.workbench.checkForUpdate(settings.channel);
   } catch { return null; }
 }

@@ -1,3 +1,10 @@
+# [1.2.0-rc.3](https://github.com/BranchBrace/branchbrace/compare/v1.2.0-rc.2...v1.2.0-rc.3) (2026-11-17)
+
+
+### Features
+
+* publier BranchBrace sur le Microsoft Store en MSIX ([d21e83d](https://github.com/BranchBrace/branchbrace/commit/d21e83ddb2b8bb7a2c319a26917aabba28e7a840))
+
 # [1.2.0-rc.2](https://github.com/BranchBrace/branchbrace/compare/v1.2.0-rc.1...v1.2.0-rc.2) (2026-11-03)
 
 

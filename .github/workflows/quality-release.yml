@@ -96,8 +96,11 @@ jobs:
       WINDOWS_SIGNING_ALIAS: ${{ vars.WINDOWS_SIGNING_ALIAS }}
       WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
     steps:
+      # The "Main" ruleset requires a PR on main and cannot exempt GITHUB_TOKEN. Checking out over SSH
+      # with the write deploy key (bypass actor of the ruleset) makes origin an SSH remote, and
+      # semantic-release pushes its release commit and tag through it before falling back to the token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {fetch-depth: 0}
+        with: {fetch-depth: 0, ssh-key: "${{ secrets.RELEASE_DEPLOY_KEY }}"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: 22}
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin

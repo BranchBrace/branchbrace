@@ -22,6 +22,10 @@ Livrer le MVP Linux x64 sous forme de paquet Debian (`.deb`, cible electron-buil
 
 - Seul le `.deb` Linux x64 est vérifié, et seulement sur Debian 13 (trixie) x86_64 en conteneur. Aucune autre distribution, architecture ni OS n’est annoncé.
 - Le sandbox Chromium utilise les espaces de noms utilisateur (cas par défaut de Debian 13). Le repli SUID `chrome-sandbox` choisi par le `postinst` sur un système sans user namespaces n’est pas vérifié.
-- Le paquet n’est pas signé et n’est publié sur aucun dépôt APT : livraison privée uniquement, sans distribution externe.
+- Le paquet n’est pas signé et n’est publié sur aucun dépôt APT. Depuis le 2026-11-03, il est publié comme asset de chaque release GitHub (voir Évolution).
 - La version du paquet est fixée au build (`-c.extraMetadata.version=<version RC>[+<commit>]`) car semantic-release ne réécrit pas `package.json` ; un build postérieur au tag porte le commit en métadonnée.
 - Le smoke installateur exerce l’app installée (lecture et rebase interactif sur un dépôt jetable) : il couvre les chemins qui diffèrent entre Node et Electron empaqueté, que `node --test` ne voit pas.
+
+## Évolution
+
+- 2026-11-03 — Le `.deb` entre dans la pipeline `semantic-release`, à la demande d’Antoine : `scripts/package-linux-release.sh` le construit dans l’image Docker du build Windows (`electronuserland/builder:wine`), avec la version de la release, et publie le paquet et son `.sha256` comme assets de la release GitHub, à côté des binaires Windows. Le smoke installateur ne tourne pas dans la release ; il reste à lancer à la main (`npm run smoke:linux-installer`). L’ADR 0003 mentionnait le `.deb` comme livraison privée hors pipeline : ce n’est plus le cas.

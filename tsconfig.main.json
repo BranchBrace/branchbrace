@@ -1,0 +1,14 @@
+{
+  // Processus principal d'Electron : compilé dans out/, qu'electron-builder embarque. Sans le DOM, pour qu'aucun module
+  // chargé par le processus principal ne dépende par mégarde d'une API du rendu.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "out"
+  },
+  "include": [],
+  "files": ["electron/main.cts", "electron/preload.cts", "scripts/apply-rebase-plan.mts", "scripts/sign-windows.cts"]
+}

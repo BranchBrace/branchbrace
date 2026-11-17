@@ -23,7 +23,7 @@ export interface ConfirmRequest {
   title: string;
   message: string;
 }
-export type UpdateSettingsView = UpdateSettings & { current: string; installable: boolean };
+export type UpdateSettingsView = UpdateSettings & { current: string; installable: boolean; store: boolean };
 export type UpdateInstallResult = { opened: string } | { installing: string };
 
 // Plusieurs dépôts peuvent être ouverts (onglets) : chaque appel désigne son dépôt par `root`, le chemin renvoyé

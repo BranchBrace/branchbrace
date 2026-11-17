@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 interface Manifest {
   main: string;
   scripts: Record<string, string>;
-  build: { files: string[]; linux: { target: unknown; maintainer?: string }; deb: { depends: string[] }; win: { signtoolOptions: { sign: string } } };
+  build: { files: string[]; linux: { target: unknown; maintainer?: string }; deb: { depends: string[] }; win: { signtoolOptions: { sign: string } }; appx: Record<string, unknown> };
 }
 const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as Manifest;
 
@@ -84,4 +84,14 @@ test('installer smoke script exists and never touches the host package database'
   assert.match(script, /docker run --rm/);
   assert.match(script, /debian:trixie/);
   assert.doesNotMatch(script, /\bsudo\b/);
+});
+
+test('Microsoft Store MSIX package carries the identity reserved in Partner Center', async () => {
+  assert.equal(manifest.scripts['package:msix'], 'npm run build:app && electron-builder --win appx --x64');
+  assert.equal(manifest.build.appx.identityName, 'AntoineMonnier.BranchBrace');
+  assert.equal(manifest.build.appx.publisher, 'CN=94794141-B9ED-4FA9-B74B-C1FC94E6B207');
+  assert.equal(manifest.build.appx.publisherDisplayName, 'Antoine Monnier');
+  for (const logo of ['StoreLogo', 'Square44x44Logo', 'Square150x150Logo', 'Wide310x150Logo']) {
+    await access(new URL(`../build/appx/${logo}.scale-100.png`, import.meta.url));
+  }
 });

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Icône BranchBrace : une branche Git entre accolades, aux couleurs de l'application (fond #070c1d, accent #eee98a).
+       Source des PNG/ICO de build/ et build/appx/, régénérés par scripts/render-icons.sh. -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#0c1328"/>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#1f394d" stroke-width="8"/>
+  <g fill="none" stroke="#eee98a" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M168 112 C130 112 134 146 134 182 L134 222 C134 244 124 256 102 256 C124 256 134 268 134 290 L134 330 C134 366 130 400 168 400"/>
+    <path d="M344 112 C382 112 378 146 378 182 L378 222 C378 244 388 256 410 256 C388 256 378 268 378 290 L378 330 C378 366 382 400 344 400"/>
+    <path d="M226 176 L226 336"/>
+    <path d="M292 206 C292 262 226 258 226 300"/>
+  </g>
+  <g fill="#eee98a">
+    <circle cx="226" cy="160" r="28"/>
+    <circle cx="226" cy="352" r="28"/>
+    <circle cx="292" cy="190" r="28"/>
+  </g>
+</svg>

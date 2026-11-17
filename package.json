@@ -17,6 +17,7 @@
     "build": "npm run build:app && electron-builder --dir",
     "package:linux": "npm run build:app && electron-builder --linux deb --x64",
     "package:win": "npm run build:app && electron-builder --win nsis portable --x64",
+    "package:msix": "npm run build:app && electron-builder --win appx --x64",
     "smoke:linux-installer": "sh scripts/smoke-linux-installer.sh",
     "smoke:win-installer": "sh scripts/smoke-win-installer.sh"
   },
@@ -101,6 +102,18 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
+    },
+    "appx": {
+      "applicationId": "BranchBrace",
+      "identityName": "AntoineMonnier.BranchBrace",
+      "publisher": "CN=94794141-B9ED-4FA9-B74B-C1FC94E6B207",
+      "publisherDisplayName": "Antoine Monnier",
+      "displayName": "BranchBrace",
+      "backgroundColor": "#0c1328",
+      "languages": [
+        "fr-FR"
+      ],
+      "artifactName": "${productName}-${version}.${ext}"
     }
   },
   "devDependencies": {

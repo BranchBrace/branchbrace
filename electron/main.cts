@@ -21,6 +21,10 @@ const { fetchFavicon } = require('../src/favicon.js') as typeof import('../src/f
 // écrit dans le profil Windows et rien n'est repris de l'ancien nom.
 const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
 if (portableDir) app.setPath('userData', path.join(portableDir, 'BranchBrace-data'));
+// Version Microsoft Store (paquet MSIX, cible « appx ») : le Store seul installe les mises à jour, l'application ne
+// télécharge ni ne lance aucun installateur et renvoie vers sa fiche Store.
+const fromStore = process.windowsStore === true;
+const STORE_PAGE = 'ms-windows-store://pdp/?productid=9N8TKSZ4DW55';
 
 // Données de l'ancien nom (session, réglages, extensions importées) : reprises une fois, au premier lancement sous
 // BranchBrace, avant toute lecture. L'ancien dossier est laissé en place.
@@ -503,7 +507,8 @@ Un point de récupération local sera conservé ; « Annuler » revient à l’�
   handle('updates:settings', async () => ({
     ...(await updates.readUpdateSettings(updateSettingsFile(), app.getVersion())),
     current: app.getVersion(),
-    installable: process.platform === 'win32' && app.isPackaged && !portableDir,
+    installable: process.platform === 'win32' && app.isPackaged && !portableDir && !fromStore,
+    store: fromStore,
   }));
   handle<UpdateSettingsChanges>('updates:settings:set', async (_event, changes) => updates.writeUpdateSettings(updateSettingsFile(), app.getVersion(), changes));
   handle<{ channel?: string }>('updates:check', async (_event, { channel } = {}) => {
@@ -512,6 +517,10 @@ Un point de récupération local sera conservé ; « Annuler » revient à l’�
     return lastUpdateCheck;
   });
   handle('updates:install', async () => {
+    if (fromStore) {
+      await shell.openExternal(STORE_PAGE);
+      return { opened: STORE_PAGE };
+    }
     const latest = lastUpdateCheck?.available ? lastUpdateCheck.latest : null;
     if (!latest) throw new BranchBraceError('update-not-available');
     if (!latest.installer || !app.isPackaged || portableDir) {

@@ -38,6 +38,27 @@ function Invoke-Store([string]$Method, [string]$Uri, $Body) {
   Invoke-RestMethod @request
 }
 
+# Le paquet Electron pèse plus de 150 Mo : un PUT unique dépasse la limite d'un blob en un appel
+# pour les anciennes versions de SAS (64 ou 256 Mo). Envoi en blocs de 4 Mio (Put Block puis
+# Put Block List), accepté par toutes les versions du service.
+function Send-Blob([string]$SasUrl, [string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  $buffer = New-Object byte[] (4MB)
+  $ids = [Collections.Generic.List[string]]::new()
+  try {
+    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $chunk = New-Object byte[] $read
+      [Array]::Copy($buffer, $chunk, $read)
+      $id = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($ids.Count.ToString('d6')))
+      Invoke-WebRequest -Method Put -Uri "$SasUrl&comp=block&blockid=$([Uri]::EscapeDataString($id))" -Body $chunk -ContentType 'application/octet-stream' | Out-Null
+      $ids.Add($id)
+    }
+  } finally { $stream.Dispose() }
+  $blockList = '<?xml version="1.0" encoding="utf-8"?><BlockList>' + (($ids | ForEach-Object { "<Latest>$_</Latest>" }) -join '') + '</BlockList>'
+  Invoke-WebRequest -Method Put -Uri "$SasUrl&comp=blocklist" -Body $blockList -ContentType 'application/xml' | Out-Null
+  Write-Host "Paquet téléversé : $($ids.Count) blocs."
+}
+
 $application = Invoke-Store GET $base $null
 Write-Host "Application : $($application.primaryName) ($ProductId)"
 if ($application.pendingApplicationSubmission) {
@@ -66,7 +87,7 @@ try {
   # Le paquet se téléverse dans une archive zip, sur l'URL SAS fournie par la soumission.
   $zip = Join-Path ([IO.Path]::GetTempPath()) "store-submission-$($submission.id).zip"
   Compress-Archive -Path $Msix -DestinationPath $zip -Force
-  Invoke-WebRequest -Method Put -Uri $submission.fileUploadUrl -InFile $zip -Headers @{ 'x-ms-blob-type' = 'BlockBlob' } | Out-Null
+  Send-Blob $submission.fileUploadUrl $zip
 
   Invoke-Store POST "$base/submissions/$($submission.id)/commit" $null | Out-Null
 } catch {

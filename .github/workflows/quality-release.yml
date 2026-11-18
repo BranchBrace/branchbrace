@@ -89,6 +89,8 @@ jobs:
     runs-on: ubuntu-24.04
     # id-token: OIDC federation with Azure for Artifact Signing (no stored secret).
     permissions: {contents: write, packages: write, pull-requests: write, issues: write, id-token: write}
+    outputs:
+      stable-tag: ${{ steps.released.outputs.tag }}
     # Windows code signing (docs/adr/0004-windows-code-signing.md). Enabled as soon as the
     # repository variable WINDOWS_SIGNING_ENDPOINT exists; until then the installer stays unsigned.
     env:
@@ -122,3 +124,19 @@ jobs:
           npx -y -p semantic-release@24 -p @semantic-release/changelog@6 -p @semantic-release/git@10
           -p @semantic-release/exec@6 semantic-release
         env: {GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"}
+      # On main, semantic-release tags the release commit it has just made locally (then pushes both
+      # through the deploy key): HEAD carries a vX.Y.Z tag only when this run released a stable version.
+      - name: Stable release tag
+        id: released
+        if: github.ref_name == 'main'
+        run: |
+          if tag=$(git describe --exact-match --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD 2>/dev/null); then
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+  # Microsoft Store update for every stable release (docs/microsoft-store.md).
+  store:
+    needs: release
+    if: needs.release.outputs.stable-tag != ''
+    permissions: {contents: read, id-token: write}
+    uses: ./.github/workflows/store.yml
+    with: {tag: "${{ needs.release.outputs.stable-tag }}"}
